@@ -1,0 +1,1071 @@
+/**
+    The purpose is to retrieve data from multiple tables and combine them into a BIG table.
+    The BIG one should have one rule per row and contains the following columns:
+    1) repo_rxn_id: converted from reaction's seed or bigg or kegg or metacyc or mnxr as the priority order
+    2) repo_substrate_id: converted from compound's seed or bigg or kegg or metacyc or mnxr as the priority order
+    3) SMARTS
+    4) formatted_Name (EC_DD): EC_number + '_' + diameter + '_' + direction
+    5) score
+    6) isStereo
+    7) repo_product_id: converted from compound's seed or bigg or kegg or metacyc or mnxr as the priority order
+    8) product_stoichiometry 
+**/
+
+KBaseMacPro-QZ:retrorules_dump qzhang$ sqlite3 mvc.db
+sqlite> .mode tabs
+sqlite> .header on
+
+/*****Getting the smaller chunks first*****/
+// A. rules.reaction_id=reactions.id gives reaction's seed or bigg or kegg or metacyc or mnxr id
+
+sqlite> select count(*) from (
+   ...> select r.reaction_id, rxn.seed, rxn.bigg, rxn.kegg, rxn.metacyc, rxn.mnxr
+   ...> from rules r, reactions rxn
+   ...> where r.reaction_id=rxn.id);
+count(*)
+652152
+select count(*) from rules;//652152
+sqlite> select count(distinct reaction_id) from rules;
+count(distinct reaction_id)
+16999
+
+
+sqlite> select count(*) from (
+   ...> select distinct r.reaction_id, rxn.seed, rxn.bigg, rxn.kegg, rxn.metacyc, rxn.mnxr
+   ...> from rules r, reactions rxn
+   ...> where r.reaction_id=rxn.id);
+count(*)
+16999
+
+sqlite> select distinct r.reaction_id, rxn.seed, rxn.bigg, rxn.kegg, rxn.metacyc, rxn.mnxr
+   ...> from rules r, reactions rxn
+   ...> where r.reaction_id=rxn.id limit 2;
+reaction_id	seed	bigg	kegg	metacyc	mnxr
+4	rxn01093	DHBSr	R01504	DHBAMPLIG-RXN	MNXR97369
+5				RXN-11249	MNXR116803
+
+sqlite> SELECT seed from reactions where seed NOT NULL limit 5;
+seed
+rxn12939
+rxn08162
+rxn05368
+rxn01093
+rxn06861
+
+
+select count(*) from reactions; // 43269
+select count(*) from (SELECT seed from reactions where seed is NULL);// 30873
+select count(*) from (
+SELECT distinct seed from reactions where seed NOT NULL
+); //12396
+
+select count(*) from (
+SELECT seed from reactions where seed NOT NULL
+); //12396
+
+select count(*) from (
+SELECT distinct seed from reactions where seed NOT NULL
+); //12396
+
+select count(*) from (
+SELECT bigg from reactions where bigg NOT NULL
+); //11625
+
+select count(*) from (
+SELECT kegg from reactions where kegg NOT NULL
+);//10262
+
+select count(*) from (
+SELECT metacyc from reactions where metacyc NOT NULL
+);//14753
+
+select count(*) from (
+SELECT mnxr from reactions where mnxr NOT NULL
+);//43269
+
+select count(*) from (
+SELECT mnxr from reactions where mnxr is NULL
+);//0
+
+select count(*) from reactions where (
+    seed NOT NULL or bigg NOT NULL or
+    kegg NOT NULL or metacyc NOT NULL or
+    mnxr NOT NULL);//43269
+
+select count(*) from reactions rxn
+where rxn.id in (select reaction_id from rules
+); //16999
+
+select count(distinct id) from reactions rxn
+where rxn.id in (select reaction_id from rules
+); //16999
+
+/****This is a VERY important and useful function!*****/
+select count(*) from (
+select rxn.id, ifnull(rxn.seed, ifnull(rxn.bigg, ifnull(rxn.kegg, ifnull(rxn.metacyc, rxn.mnxr)))) as repo_rxn_id
+from reactions rxn
+); //43269
+
+select rxn.id, ifnull(rxn.seed, ifnull(rxn.bigg, ifnull(rxn.kegg, ifnull(rxn.metacyc, rxn.mnxr)))) as repo_rxn_id
+from reactions rxn limit 2;
+id	repo_rxn_id
+0	rxn12939
+1	rxn08162
+
+select count(*) from (
+select rxn.id, er.ec_number, ifnull(rxn.seed, ifnull(rxn.bigg, ifnull(rxn.kegg, ifnull(rxn.metacyc, rxn.mnxr)))) as repo_rxn_id
+from reactions rxn, ec_reactions er
+where er.reaction_id=rxn.id
+); //28668
+
+select count(*) from (
+select r.reaction_id, ifnull(rxn.seed, ifnull(rxn.bigg, ifnull(rxn.kegg, ifnull(rxn.metacyc, rxn.mnxr)))) as repo_rxn_id
+from rules r, reactions rxn
+where r.reaction_id=rxn.id
+);//652152
+
+
+select count(*) from (
+select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+from chemical_species cs
+); //27527
+
+
+(select rxn.id, ifnull(rxn.seed, ifnull(rxn.bigg, ifnull(rxn.kegg, ifnull(rxn.metacyc, rxn.mnxr)))) as repo_rxn_id
+from reactions rxn) as rxn_info
+(select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+from chemical_species cs) as cs_info
+(select rp.reaction_id, cs_info.repo_cpd_id, rp.stochiometry as product_stoichiometry
+from rule_products rp,
+(select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+from chemical_species cs) as cs_info
+where rp.product_id=cs_info.id) as product_info
+
+
+sqlite> select count(*) from rule_products;
+count(*)
+1236571
+
+select count(*) from (
+select rp.reaction_id, cs_info.repo_cpd_id, rp.stochiometry as product_stoichiometry
+from rule_products rp,
+(select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+from chemical_species cs) as cs_info
+where rp.product_id=cs_info.id
+);//1236571
+
+SELECT COUNT(*) FROM (
+select rxn.id as reaction_id, r.score, r.isStereo, '"'||s.smarts_string||'"' as SMARTS,
+'"'||er.ec_number ||'_'|| r.direction || '_' || r.diameter||'"' as concated_Name
+from ec_reactions er, rules r, reactions rxn, smarts s 
+where er.reaction_id=rxn.id and r.reaction_id=rxn.id and s.id=r.smarts_id
+);//561632
+
+SELECT COUNT(*) FROM (
+select rxn_info.id as reaction_id, rxn_info.repo_rxn_id, r.score, r.isStereo, '"'||s.smarts_string||'"' as SMARTS,
+'"'||er.ec_number ||'_'|| r.direction || '_' || r.diameter||'"' as formatted_Name
+from ec_reactions er, rules r, reactions rxn, smarts s,
+(select rxn.id, ifnull(rxn.seed, ifnull(rxn.bigg, ifnull(rxn.kegg, ifnull(rxn.metacyc, rxn.mnxr)))) as repo_rxn_id
+from reactions rxn) as rxn_info
+where er.reaction_id=rxn_info.id and r.reaction_id=rxn_info.id and s.id=r.smarts_id
+);//561632
+
+sqlite> SELECT COUNT(*) FROM (
+select rxn_info.id as reaction_id, rxn_info.repo_rxn_id, r.score, r.isStereo, '"'||s.smarts_string||'"' as SMARTS,
+'"'||er.ec_number ||'_'|| r.direction || '_' || r.diameter||'"' as formatted_Name
+from ec_reactions er, rules r, smarts s,
+(select rxn.id, ifnull(rxn.seed, ifnull(rxn.bigg, ifnull(rxn.kegg, ifnull(rxn.metacyc, rxn.mnxr)))) as repo_rxn_id
+from reactions rxn) as rxn_info
+where er.reaction_id=rxn_info.id and r.reaction_id=rxn_info.id and s.id=r.smarts_id
+);//561632
+
+SELECT COUNT(*) FROM (
+select rxn_info.id as reaction_id, rxn_info.repo_rxn_id, cs_info.repo_cpd_id as repo_substrate_id, r.score, r.isStereo, '"'||s.smarts_string||'"' as SMARTS,
+'"'||er.ec_number ||'_'|| r.direction || '_' || r.diameter||'"' as formatted_Name
+from ec_reactions er, rules r, smarts s,
+(select rxn.id, ifnull(rxn.seed, ifnull(rxn.bigg, ifnull(rxn.kegg, ifnull(rxn.metacyc, rxn.mnxr)))) as repo_rxn_id
+from reactions rxn) as rxn_info,
+(select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+from chemical_species cs) as cs_info
+where er.reaction_id=rxn_info.id and r.reaction_id=rxn_info.id and s.id=r.smarts_id and cs_info.id=r.substrate_id
+);//561632
+
+
+SELECT COUNT(*) FROM (
+select rxn_info.id as reaction_id, rxn_info.repo_rxn_id, cs_info.repo_cpd_id as repo_substrate_id,
+product_info.repo_prod_id, product_info.prod_stoichio, r.score, r.isStereo, s.smarts_string as SMARTS,
+er.ec_number ||'_'|| r.direction || '_' || r.diameter as formatted_Name
+from ec_reactions er, rules r, smarts s,
+(select rxn.id, ifnull(rxn.seed, ifnull(rxn.bigg, ifnull(rxn.kegg, ifnull(rxn.metacyc, rxn.mnxr)))) as repo_rxn_id
+from reactions rxn) as rxn_info,
+(select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+from chemical_species cs) as cs_info,
+(select rp.reaction_id, cs_info1.repo_cpd_id as repo_prod_id, rp.stochiometry as prod_stoichio
+from rule_products rp,
+(select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+from chemical_species cs) as cs_info1
+where rp.product_id=cs_info1.id) as product_info
+where er.reaction_id=rxn_info.id and r.reaction_id=rxn_info.id and s.id=r.smarts_id
+and cs_info.id=r.substrate_id and product_info.reaction_id=r.reaction_id
+);//44278944
+
+SELECT COUNT(*) FROM (
+select distinct rxn_info.id as reaction_id, rxn_info.repo_rxn_id, cs_info.repo_cpd_id as repo_substrate_id,
+product_info.repo_prod_id, product_info.prod_stoichio, r.score, r.isStereo, s.smarts_string as SMARTS,
+er.ec_number ||'_'|| r.direction || '_' || r.diameter as formatted_Name
+from ec_reactions er, rules r, smarts s,
+(select rxn.id, ifnull(rxn.seed, ifnull(rxn.bigg, ifnull(rxn.kegg, ifnull(rxn.metacyc, rxn.mnxr)))) as repo_rxn_id
+from reactions rxn) as rxn_info,
+(select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+from chemical_species cs) as cs_info,
+(select rp.reaction_id, cs_info1.repo_cpd_id as repo_prod_id, rp.stochiometry as prod_stoichio
+from rule_products rp,
+(select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+from chemical_species cs) as cs_info1
+where rp.product_id=cs_info1.id) as product_info
+where er.reaction_id=rxn_info.id and r.reaction_id=rxn_info.id and s.id=r.smarts_id
+and cs_info.id=r.substrate_id and product_info.reaction_id=r.reaction_id
+);//2243968
+
+/****Rules are encoded in the community-standard SMARTS formalism.
+At the center of the schema is the rules table that contains the information to uniquely describe
+a reaction rule from a mono-component reaction, where one rule is associated with 
+a given substrate from a given reaction at a given diameter.
+
+However each rule can have multiple products, described in the rule_products table. The SMARTS and SMILES
+description of these rules can be found in the smarts and smiles tables respectively since a given SMARTS
+or SMILES description of a rule can apply to multiple reactions, substrates and diameters. The rest of the
+tables are meta-informations extracted from source databases.
+****/
+
+sqlite> select count(*) from rules;
+count(*)
+652152
+sqlite> select count(*) from (select distinct reaction_id,diameter,substrate_id,isStereo from rules);
+count(*)
+652152
+sqlite> select count(*) from (select distinct reaction_id,smarts_id,diameter,substrate_id,isStereo from rules);
+count(*)
+652152
+sqlite> select count(*) from (select distinct reaction_id,substrate_id,diameter,isStereo from rule_products);
+count(*)
+652152
+/*Note: the above four queries return the same count! It confirms that each row in the table of rules is
+  compromised of unique (reaction_id,diameter,substrate_id,isStereo) as in the description quoted from retrorules.org
+  website.
+  In the meantime, there are 1236571 rows in table rule_products
+  Subsequently, if we join tables rules and rule_products, we will get 2243968 unique rows.
+ **/
+
+sqlite> select count(distinct reaction_id) from rules;
+count(distinct reaction_id)
+16999
+sqlite> select count(distinct smarts_id) from rules;
+count(distinct smarts_id)
+344896
+
+sqlite> select count(*) from (select distinct reaction_id,smarts_id from rules);
+count(*)
+481281
+
+sqlite> select count(*) from (select distinct reaction_id,smarts_id,diameter from rules);
+count(*)
+614557
+sqlite> select count(*) from (select distinct reaction_id,smarts_id,diameter,isStereo from rules);
+count(*)
+652114
+sqlite> select count(*) from (select distinct reaction_id,smarts_id,diameter,substrate_id from rules);
+count(*)
+614593
+sqlite> select count(*) from rule_products;
+count(*)
+1236571
+------------------------------------------------------------------------
+SELECT COUNT(*) FROM (
+select distinct rxn_info.id as reaction_id, rxn_info.repo_rxn_id, cs_info.repo_cpd_id as repo_substrate_id,
+product_info.repo_prod_id, product_info.prod_stoichio, r.score, r.isStereo, s.smarts_string as SMARTS,
+er.ec_number ||'_'|| r.direction || '_' || r.diameter as formatted_Name
+from ec_reactions er, rules r, smarts s,
+(select rxn.id, ifnull(rxn.seed, ifnull(rxn.bigg, ifnull(rxn.kegg, ifnull(rxn.metacyc, rxn.mnxr)))) as repo_rxn_id
+from reactions rxn) as rxn_info,
+(select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+from chemical_species cs) as cs_info,
+(select rp.reaction_id, cs_info1.repo_cpd_id as repo_prod_id, rp.stochiometry as prod_stoichio
+from rule_products rp,
+(select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+from chemical_species cs) as cs_info1
+where rp.product_id=cs_info1.id) as product_info
+where er.reaction_id=rxn_info.id and r.reaction_id=rxn_info.id and s.id=r.smarts_id
+and cs_info.id=r.substrate_id and product_info.reaction_id=r.reaction_id
+);//2243968
+
+
+/****
+To reduce the number or rows of the resulting table, and keep it at one row per rule just like the original table 'rules'
+the following queries will be tested.
+****/
+
+SELECT COUNT(*) FROM (
+SELECT reaction_id, repo_rxn_id, repo_substrate_id, score, isStereo, SMARTS, formatted_Name,
+group_concat(distinct repo_prod_id) as prod_id,
+group_concat(distinct prod_stoichio) as prod_stoichio
+from
+(
+select distinct rxn_info.id as reaction_id, rxn_info.repo_rxn_id, cs_info.repo_cpd_id as repo_substrate_id,
+product_info.repo_prod_id, product_info.prod_stoichio, r.score, r.isStereo, s.smarts_string as SMARTS,
+er.ec_number ||'_'|| r.direction || '_' || r.diameter as formatted_Name
+from ec_reactions er, rules r, smarts s,
+(select rxn.id, ifnull(rxn.seed, ifnull(rxn.bigg, ifnull(rxn.kegg, ifnull(rxn.metacyc, rxn.mnxr)))) as repo_rxn_id
+from reactions rxn) as rxn_info,
+(select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+from chemical_species cs) as cs_info,
+(select rp.reaction_id, cs_info1.repo_cpd_id as repo_prod_id, rp.stochiometry as prod_stoichio
+from rule_products rp,
+(select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+from chemical_species cs) as cs_info1
+where rp.product_id=cs_info1.id) as product_info
+where er.reaction_id=rxn_info.id and r.reaction_id=rxn_info.id and s.id=r.smarts_id
+and cs_info.id=r.substrate_id and product_info.reaction_id=r.reaction_id
+)
+group by reaction_id, repo_rxn_id,repo_substrate_id,score,isStereo,SMARTS,formatted_Name
+);//2243968
+
+
+SELECT COUNT(*) FROM (
+select r.reaction_id, cs_info.repo_cpd_id as repo_substrate_id,r.score, r.isStereo, s.smarts_string as SMARTS,r.diameter,r.direction
+from rules r, smarts s,
+(select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+from chemical_species cs) as cs_info
+where s.id=r.smarts_id and cs_info.id=r.substrate_id
+);//652152
+
+
+SELECT COUNT(*) FROM (
+select rxn_info.id, rxn_info.repo_rxn_id,er.ec_number
+from ec_reactions er,
+(select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+from reactions rxn1) as rxn_info
+where er.reaction_id=rxn_info.id
+);//28668
+
+SELECT COUNT(*) FROM (
+        select rl.reaction_id,rxn.repo_rxn_id,rl.substrate_id,rl.repo_substrate_id,rl.score,rl.isStereo,rl.SMARTS,
+        rl.diameter,rxn.ec_number||'_'||rl.direction||'_'||rl.diameter as formatted_Name
+        from
+            (
+                select r.reaction_id, r.substrate_id,cs_info.repo_cpd_id as repo_substrate_id,r.score, r.isStereo,
+                s.smarts_string as SMARTS,r.diameter,r.direction
+                from rules r, smarts s,
+                (
+                    select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                    from chemical_species cs
+                ) as cs_info
+                where s.id=r.smarts_id and cs_info.id=r.substrate_id
+             ) as rl,
+             (
+                select rxn_info.id, rxn_info.repo_rxn_id,er.ec_number
+                from ec_reactions er,
+                (
+                    select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+                    from reactions rxn1
+                ) as rxn_info
+                where er.reaction_id=rxn_info.id
+            ) as rxn
+        where rl.reaction_id=rxn.id
+);//561632
+
+SELECT COUNT(*) FROM (
+select reaction_id,substrate_id,diameter,isStereo,group_concat(repo_prod_id) as repo_prod_ids,group_concat(prod_stoichio) as prod_stoichios
+from 
+( 
+select rp.reaction_id, rp.substrate_id, rp.diameter,rp.isStereo, cs_info1.repo_cpd_id as repo_prod_id, rp.stochiometry as prod_stoichio
+from rule_products rp,
+(select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+from chemical_species cs) as cs_info1
+where rp.product_id=cs_info1.id
+)
+group by reaction_id,substrate_id,diameter,isStereo
+);//652152
+
+
+/*************************************************************************************/
+
+SELECT COUNT(*) FROM (
+    select rl_rxn.reaction_id,rl_rxn.repo_rxn_id,rl_rxn.repo_substrate_id,rl_rxn.score,rl_rxn.isStereo,rl_rxn.SMARTS,rl_rxn.formatted_Name,
+    product_info.repo_prod_ids, product_info.prod_stoichios
+    from 
+    (
+        select rl.reaction_id,rxn.repo_rxn_id,rl.substrate_id,rl.repo_substrate_id,rl.score,rl.isStereo,rl.SMARTS,
+        rl.diameter,rxn.ec_number||'_'||rl.direction||'_'||rl.diameter as formatted_Name
+        from
+            (
+                select r.reaction_id, r.substrate_id,cs_info.repo_cpd_id as repo_substrate_id,r.score, r.isStereo,
+                s.smarts_string as SMARTS,r.diameter,r.direction
+                from rules r, smarts s,
+                (
+                    select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                    from chemical_species cs
+                ) as cs_info
+                where s.id=r.smarts_id and cs_info.id=r.substrate_id
+             ) as rl,
+             (
+                select rxn_info.id, rxn_info.repo_rxn_id,er.ec_number
+                from ec_reactions er,
+                (
+                    select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+                    from reactions rxn1
+                ) as rxn_info
+                where er.reaction_id=rxn_info.id
+            ) as rxn
+        where rl.reaction_id=rxn.id
+    ) as rl_rxn,
+    (
+        select reaction_id,substrate_id,diameter,isStereo,group_concat(repo_prod_id) as repo_prod_ids,group_concat(prod_stoichio) as prod_stoichios
+        from 
+        ( 
+            select rp.reaction_id, rp.substrate_id, rp.diameter,rp.isStereo, cs_info1.repo_cpd_id as repo_prod_id, rp.stochiometry as prod_stoichio
+            from rule_products rp,
+            (
+                select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                from chemical_species cs
+            ) as cs_info1
+            where rp.product_id=cs_info1.id
+        )
+        group by reaction_id,substrate_id,diameter,isStereo
+    ) as product_info
+    where rl_rxn.reaction_id=product_info.reaction_id and
+    rl_rxn.substrate_id=product_info.substrate_id and
+    rl_rxn.diameter=product_info.diameter and
+    rl_rxn.isStereo=product_info.isStereo
+);//561632
+
+/*****************************************Expanding to add more reaction columns********************************************/
+/**
+Can you get the inchi string for all the substrates of a reaction, concatenate with a character that doesn't occur in 
+inchi (".", "|","&",'/"), and put that in a column labeled "substrate_inchi". Do NOT include the inchi for the compound
+listed in the "repo_substrate_id" column. Only include the others.
+
+Do the same for the products of the reaction. Concatenate the inchi for all the products listed, but DONOT include the
+inchi for the compounds listed in the repo_prod_ids column. Only include the others.
+
+**/
+1) From the above, the reactions table was joined with the ec_reactions table only
+select rxn_info.id, rxn_info.repo_rxn_id,er.ec_number
+from ec_reactions er,
+(
+    select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+    from reactions rxn1
+) as rxn_info
+where er.reaction_id=rxn_info.id
+
+2) Now we need to join, in addition, with tables reaction_products, reaction_substrates and, subsequently, chemical_species.
+2.1) Table info*********************************
+sqlite> select count(*) from reaction_products;
+102628
+sqlite> select count(distinct chemical_id) from reaction_products;
+count(distinct chemical_id)
+18242
+sqlite> select count(*) from reaction_substrates;
+100166
+sqlite> select count(distinct chemical_id) from reaction_substrates;
+count(distinct chemical_id)
+19770
+sqlite> select count(*) from chemical_species;
+27527
+sqlite> select count(distinct id) from chemical_species;
+count(distinct id)
+27527
+sqlite> select count(*) from chemical_species
+where inchi_key not null;
+count(*)
+13802
+sqlite> select count(*) from reactions;
+43269
+
+sqlite> select * from reaction_products limit 2;
+reaction_id	chemical_id	stochiometry	is_main
+17743	24661	1	1
+31815	8072	1	1
+sqlite> select * from reaction_substrates limit 2;
+reaction_id	chemical_id	stochiometry	is_main
+17743	24665	1	1
+31815	8072	1	1
+sqlite> select * from chemical_species limit 2;
+id	name	mnxm	bigg	chebi	envipath	hmdb	kegg	lipidmaps	metacyc	reactome	sabiork	seed	slm	inchi_key
+0	coumarin	MNXM2111	coumarin	41552		HMDB01218	D07751		COUMARIN	76328	8206	cpd03479		ZYGHJZDHTFUPRJ
+1	Holo-AsbD-Proteins	MNXM7434							Holo-AsbD-Proteins			cpd27257
+
+2.2) Joining reactions, reaction_substrates and chemical_species*********************************
+select count(*)
+from reactions rxn, reaction_substrates rs,
+(
+    select cs.id as chem_sp_id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+    from chemical_species cs
+) as cs_info
+where rxn.id=rs.reaction_id and rs.chemical_id=cs_info.chem_sp_id
+;//102628
+
+select rxn.id as reaction_id, cs_info.inchi_key, cs_info.repo_cpd_id
+from reactions rxn, reaction_substrates rs,
+(
+    select cs.id as chem_sp_id, cs.inchi_key, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+    from chemical_species cs
+) as cs_info
+where rxn.id=rs.reaction_id and rs.chemical_id=cs_info.chem_sp_id
+limit 10;
+-------------------------------------------------------------------
+reaction_id	inchi_key	repo_cpd_id
+0	XJLXINKUBYWONI	cpd00006
+0		cpd16856
+1	DCXYFEDJOCDNAF	cpd15142
+2		G10694
+2	WQZGKKKJIJFFOK	cpd27437
+3	XJLXINKUBYWONI	cpd00006
+3		cpd11505
+4	XPPKVPWEQAFLFU	cpd27828
+4	ULPVJDOMCRTJSN	cpd02494
+5	ACTWFMHQVJBPRM	cpd23292
+
+2.3) Joining reactions, reaction_products and chemical_species*********************************
+select count(*)
+from reactions rxn, reaction_products rp,
+(
+    select cs.id as chem_sp_id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+    from chemical_species cs
+) as cs_info
+where rxn.id=rp.reaction_id and rp.chemical_id=cs_info.chem_sp_id
+;//102628
+
+select rxn.id as reaction_id, cs_info.inchi_key, cs_info.repo_cpd_id
+from reactions rxn, reaction_products rp,
+(
+    select cs.id as chem_sp_id, cs.inchi_key, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+    from chemical_species cs
+) as cs_info
+where rxn.id=rp.reaction_id and rp.chemical_id=cs_info.chem_sp_id
+limit 10;
+-------------------------------------------------------------------
+reaction_id	inchi_key	repo_cpd_id
+0		cpd11486
+0	ACFIXJIJDZMPPO	cpd00005
+0	GPRLSGONYQIRFK	cpd00067
+1	DCXYFEDJOCDNAF	cpd15142
+2	XLYOFNOQVPJJNP	cpd27222
+2		cpd29768
+3	ACFIXJIJDZMPPO	cpd00005
+3	GPRLSGONYQIRFK	cpd00067
+3		cpd11504
+4	GLDQAMYCGOIJDV	cpd00168
+
+3) Further we need to exclude from the above joining results the compounds that are included in the following rules' substrtate or products:
+3.1) exclude from the above joining results the compounds that are included in the following rules' substrtates:  
+sqlite> select count(distinct substrate_id) from rules;
+count(distinct substrate_id)
+11879
+
+select count(*) from
+(
+    select rxn.id as reaction_id, cs_info.inchi_key, cs_info.repo_cpd_id
+    from reactions rxn, reaction_substrates rs,
+    (
+        select cs.id as chem_sp_id, cs.inchi_key, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+        from chemical_species cs
+    ) as cs_info
+    where rxn.id=rs.reaction_id and rs.chemical_id=cs_info.chem_sp_id
+);//100166
+
+select count(*) from
+(
+    select rxn.id as reaction_id, cs_info.inchi_key, rs.chemical_id, cs_info.repo_cpd_id
+    from reactions rxn, reaction_substrates rs,
+    (
+        select cs.id as chem_sp_id, cs.inchi_key, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+        from chemical_species cs
+    ) as cs_info
+    where rxn.id=rs.reaction_id and rs.chemical_id=cs_info.chem_sp_id
+    and rs.chemical_id in (select distinct substrate_id from rules r)
+);//73720
+
+select count(*) from
+(
+    select distinct rs.chemical_id from reaction_substrates rs
+    where rs.chemical_id not in (select distinct substrate_id from rules)
+);//10736
+
+select count(*) from
+(
+    select rxn.id as reaction_id, cs_info.inchi_key, rs.chemical_id
+    from reactions rxn, reaction_substrates rs,
+    (
+        select cs.id as chem_sp_id, cs.inchi_key
+        from chemical_species cs
+    ) as cs_info
+    where rxn.id=rs.reaction_id and rs.chemical_id=cs_info.chem_sp_id
+    and rs.chemical_id not in (select distinct substrate_id from rules r)
+);//26446
+
+
+select reaction_id, inchi_key, chemical_id from
+(
+    select rxn.id as reaction_id, cs_info.inchi_key, rs.chemical_id
+    from reactions rxn, reaction_substrates rs,
+    (
+        select cs.id as chem_sp_id, cs.inchi_key
+        from chemical_species cs
+    ) as cs_info
+    where rxn.id=rs.reaction_id and rs.chemical_id=cs_info.chem_sp_id
+    and rs.chemical_id not in (select distinct substrate_id from rules r)
+) limit 10;
+-------------------------------------------------------------------
+reaction_id	inchi_key	chemical_id
+0		16834
+2		4238
+3		17309
+7		27073
+8		7684
+11	XAOLJGCZESYRFT	21859
+11		22412
+12		20982
+13		6918
+13		10091
+
+-------------------------------------------------------------------
+select count(*)
+from
+(
+    select rxn.id as reaction_id, cs_info.inchi_key
+    from reactions rxn, reaction_substrates rs,
+    (
+        select distinct cs.id as chem_sp_id, cs.inchi_key
+        from chemical_species cs
+        where cs.inchi_key not null
+    ) as cs_info
+    where rxn.id=rs.reaction_id and rs.chemical_id=cs_info.chem_sp_id
+    and rs.chemical_id not in (select distinct substrate_id from rules r)
+);//4287
+
+select count(*) from (
+select reaction_id, group_concat(distinct inchi_key)
+from
+(
+    select rxn.id as reaction_id, cs_info.inchi_key
+    from reactions rxn, reaction_substrates rs,
+    (
+        select distinct cs.id as chem_sp_id, cs.inchi_key
+        from chemical_species cs
+        where cs.inchi_key not null
+    ) as cs_info
+    where rxn.id=rs.reaction_id and rs.chemical_id=cs_info.chem_sp_id
+    and rs.chemical_id not in (select distinct substrate_id from rules r)
+)
+group by reaction_id
+);//4035
+
+select reaction_id, group_concat(distinct inchi_key) as substrate_inchi
+from
+(
+    select rxn.id as reaction_id, cs_info.inchi_key
+    from reactions rxn, reaction_substrates rs,
+    (
+        select distinct cs.id as chem_sp_id, cs.inchi_key
+        from chemical_species cs
+        where cs.inchi_key not null
+    ) as cs_info
+    where rxn.id=rs.reaction_id and rs.chemical_id=cs_info.chem_sp_id
+    and rs.chemical_id not in (select distinct substrate_id from rules r)
+)
+group by reaction_id
+limit 10
+;
+-------------------------------------------------------------------
+reaction_id	substrate_inchi
+11	XAOLJGCZESYRFT
+59	GPRLSGONYQIRFK
+72	XEEYBQQBJWHFJM
+76	GBDZXPJXOMHESU
+111	KFJNVVJUICKJEQ
+120	SAMOBDXITATWFO
+125	GPRLSGONYQIRFK
+126	FKNQFGJONOIPTF
+145	WZGNVVUXVXNNOX
+148	FKNQFGJONOIPTF
+
+
+3.2) exclude from the above joining results the compounds that are included in table of rule_products:  
+sqlite> select count(distinct product_id) from rule_products;
+count(distinct product_id)
+11880
+sqlite> select count(distinct chemical_id) from reaction_products;
+count(distinct chemical_id)
+18242
+
+select count(*) from
+(
+    select distinct rxn.id as reaction_id, cs_info.inchi_key, rp.chemical_id
+    from reactions rxn, reaction_products rp,
+    (
+        select cs.id as chem_sp_id, cs.inchi_key
+        from chemical_species cs
+    ) as cs_info
+    where rxn.id=rp.reaction_id and rp.chemical_id=cs_info.chem_sp_id
+    and rp.chemical_id not in (select distinct product_id from rule_products)
+);//26000
+
+select count(*) from
+(
+    select distinct rxn.id as reaction_id, cs_info.inchi_key, rp.chemical_id
+    from reactions rxn, reaction_products rp,
+    (
+        select cs.id as chem_sp_id, cs.inchi_key
+        from chemical_species cs
+    ) as cs_info
+    where rxn.id=rp.reaction_id and rp.chemical_id=cs_info.chem_sp_id
+    and rp.chemical_id in (select distinct product_id from rule_products)
+);//76628
+
+select count(*) from
+(
+    select distinct rp.chemical_id from reaction_products rp
+    where rp.chemical_id not in (select distinct product_id from rule_products)
+);//9827
+
+-------------------------------------------------------------------
+select count(*)
+from
+(
+    select rxn.id as reaction_id, cs_info.inchi_key
+    from reactions rxn, reaction_products rp,
+    (
+        select distinct cs.id as chem_sp_id, cs.inchi_key
+        from chemical_species cs
+        where cs.inchi_key not null
+    ) as cs_info
+    where rxn.id=rp.reaction_id and rp.chemical_id=cs_info.chem_sp_id
+    and rp.chemical_id not in (select distinct substrate_id from rules r)
+);//4354
+
+select count(*) from (
+select reaction_id, group_concat(distinct inchi_key)
+from
+(
+    select rxn.id as reaction_id, cs_info.inchi_key
+    from reactions rxn, reaction_products rp,
+    (
+        select distinct cs.id as chem_sp_id, cs.inchi_key
+        from chemical_species cs
+        where cs.inchi_key not null
+    ) as cs_info
+    where rxn.id=rp.reaction_id and rp.chemical_id=cs_info.chem_sp_id
+    and rp.chemical_id not in (select distinct substrate_id from rules r)
+)
+group by reaction_id
+);//4016
+
+select reaction_id, group_concat(distinct inchi_key) as product_inchi
+from
+(
+    select rxn.id as reaction_id, cs_info.inchi_key
+    from reactions rxn, reaction_products rp,
+    (
+        select distinct cs.id as chem_sp_id, cs.inchi_key
+        from chemical_species cs
+        where cs.inchi_key not null
+    ) as cs_info
+    where rxn.id=rp.reaction_id and rp.chemical_id=cs_info.chem_sp_id
+    and rp.chemical_id not in (select distinct substrate_id from rules r)
+)
+group by reaction_id
+limit 10
+;
+
+-------------------------------------------------------------------
+reaction_id	product_inchi
+11	KRXYYUZJVIKNHD
+19	GCPHOPWKQDRMLX
+59	GPRLSGONYQIRFK
+70	SIDLHXXVIBTSJZ
+72	WZGNVVUXVXNNOX
+76	QMPJUPQCSWMOMB
+91	WZHGNXKRUDLHOX
+111	PNZHRLSVSIGZON
+120	ZPPQIOUITZSYAO
+125	GPRLSGONYQIRFK
+
+
+=====================================================================
+SELECT COUNT(*) FROM (
+    select rl_rxn.reaction_id,rl_rxn.repo_rxn_id,rl_rxn.repo_substrate_id,rl_rxn.score,rl_rxn.isStereo,rl_rxn.SMARTS,rl_rxn.formatted_Name,
+    product_info.repo_prod_ids, product_info.prod_stoichios,rxn_substrate_inchiKeys.substrate_inchi,rxn_product_inchiKeys.product_inchi
+    from 
+    (
+        select rl.reaction_id,rxn.repo_rxn_id,rl.substrate_id,rl.repo_substrate_id,rl.score,rl.isStereo,rl.SMARTS,
+        rl.diameter,rxn.ec_number||'_'||rl.direction||'_'||rl.diameter as formatted_Name
+        from
+            (
+                select r.reaction_id, r.substrate_id,cs_info.repo_cpd_id as repo_substrate_id,r.score, r.isStereo,
+                s.smarts_string as SMARTS,r.diameter,r.direction
+                from rules r, smarts s,
+                (
+                    select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                    from chemical_species cs
+                ) as cs_info
+                where s.id=r.smarts_id and cs_info.id=r.substrate_id
+             ) as rl,
+             (
+                select rxn_info.id, rxn_info.repo_rxn_id,er.ec_number
+                from ec_reactions er,
+                (
+                    select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+                    from reactions rxn1
+                ) as rxn_info
+                where er.reaction_id=rxn_info.id
+             ) as rxn
+        where rl.reaction_id=rxn.id
+    ) as rl_rxn,
+    (
+        select reaction_id,substrate_id,diameter,isStereo,group_concat(repo_prod_id) as repo_prod_ids,group_concat(prod_stoichio) as prod_stoichios
+        from 
+        ( 
+            select rp.reaction_id, rp.substrate_id, rp.diameter,rp.isStereo, cs_info1.repo_cpd_id as repo_prod_id, rp.stochiometry as prod_stoichio
+            from rule_products rp,
+            (
+                select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                from chemical_species cs
+            ) as cs_info1
+            where rp.product_id=cs_info1.id
+        )
+        group by reaction_id,substrate_id,diameter,isStereo
+    ) as product_info,
+    (
+        select reaction_id, group_concat(distinct inchi_key) as substrate_inchi
+        from
+        (
+            select rxn.id as reaction_id, cs_info.inchi_key
+            from reactions rxn, reaction_substrates rs,
+            (
+                select distinct cs.id as chem_sp_id, cs.inchi_key
+                from chemical_species cs
+            ) as cs_info
+            where rxn.id=rs.reaction_id and rs.chemical_id=cs_info.chem_sp_id
+            and rs.chemical_id not in (select distinct substrate_id from rules r)
+        )
+        group by reaction_id
+    ) as rxn_substrate_inchiKeys,
+    (
+        select reaction_id, group_concat(distinct inchi_key) as product_inchi
+        from
+        (
+            select rxn.id as reaction_id, cs_info.inchi_key
+            from reactions rxn, reaction_products rp,
+            (
+                select distinct cs.id as chem_sp_id, cs.inchi_key
+                from chemical_species cs
+            ) as cs_info
+            where rxn.id=rp.reaction_id and rp.chemical_id=cs_info.chem_sp_id
+            and rp.chemical_id not in (select distinct substrate_id from rules r)
+        )
+        group by reaction_id
+    ) as rxn_product_inchiKeys
+    where rl_rxn.reaction_id=product_info.reaction_id and
+    rl_rxn.substrate_id=product_info.substrate_id and
+    rl_rxn.diameter=product_info.diameter and
+    rl_rxn.isStereo=product_info.isStereo and
+    rl_rxn.reaction_id=rxn_substrate_inchiKeys.reaction_id and
+    rl_rxn.reaction_id=rxn_product_inchiKeys.reaction_id 
+);//8192
+//The above count will become 39168 if I remove the following line
+                'where cs.inchi_key not null'
+
+from the following blocks of query code in the subqueries rxn_substrate_inchiKeys and rxn_product_inchiKeys:
+-----------------------block-----------------------------------------
+            (
+                select distinct cs.id as chem_sp_id, cs.inchi_key
+                from chemical_species cs
+                where cs.inchi_key not null
+            ) as cs_info
+-----------------------block-----------------------------------------
+
+/***********First 10 rows********************************************/
+reaction_id	repo_rxn_id	repo_substrate_id	score	isStereo	SMARTS	formatted_Name	repo_prod_ids	prod_stoichios	substrate_inchi	product_inchi
+29	R07458	cpd14529	0.602059991327962	0	([#6&v4:1]-[#6&v4:2](-[#6&v4:3])=[#8&v2:4])>>([#6&v4:1]-[#6&v4:2](-[#6&v4:3])(-[#1&v1])-[#1&v1].[#8&v2:4]=[#8&v2])	1.14_-1_2	cpd00007,cpd14537	1,1		
+29	R07458	cpd14529	0.602059991327962	1	([#6&v4:1]-[#6&v4:2](=[#8&v2:3])-[#6&v4:4])>>([#6&v4:1]-[#6&v4:2](-[#1&v1])(-[#1&v1])-[#6&v4:4].[#8&v2:3]=[#8&v2])	1.14_-1_2	cpd14537,cpd00007	1,1		
+29	R07458	cpd14529	4.14553823571223	0	([#6&v4:1]-[#6&v4:2](-[#6&v4:3](-[#6&v4:4](-[#6&v4:5])(-[#1&v1:6])-[#1&v1:7])=[#8&v2:8])(-[#6&v4:9])-[#1&v1:10])>>([#6&v4:1]-[#6&v4:2](-[#6&v4:3](-[#6&v4:4](-[#6&v4:5])(-[#1&v1:6])-[#1&v1:7])(-[#1&v1])-[#1&v1])(-[#6&v4:9])-[#1&v1:10].[#8&v2:8]=[#8&v2])	1.14_-1_4	cpd00007,cpd14537	1,1		
+29	R07458	cpd14529	4.04704110341591	1	([#6&v4:1]-[#6@@&v4:2](-[#1&v1:3])(-[#6&v4:4](=[#8&v2:5])-[#6&v4:6](-[#1&v1:7])(-[#1&v1:8])-[#6&v4:9])-[#6&v4:10])>>([#6&v4:1]-[#6@@&v4:2](-[#1&v1:3])(-[#6&v4:4](-[#1&v1])(-[#1&v1])-[#6&v4:6](-[#1&v1:7])(-[#1&v1:8])-[#6&v4:9])-[#6&v4:10].[#8&v2:5]=[#8&v2])1.14_-1_4	cpd14537,cpd00007	1,1		
+29	R07458	cpd14529	4.0135113334659	0	([#6&v4:1]-[#6&v4:2](-[#6&v4:3]1(-[#6&v4:4](-[#6&v4:5])(-[#6&v4:6])-[#6&v4:7]-[#6&v4:8](-[#6&v4:9](-[#6&v4:10]-1=[#8&v2:11])(-[#1&v1:12])-[#1&v1:13])(-[#6&v4:14])-[#1&v1:15])-[#1&v1:16])(-[#1&v1:17])-[#1&v1:18])>>([#6&v4:1]-[#6&v4:2](-[#6&v4:3]1(-[#6&v4:4](-[#6&v4:5])(-[#6&v4:6])-[#6&v4:7]-[#6&v4:8](-[#6&v4:9](-[#6&v4:10]-1(-[#1&v1])-[#1&v1])(-[#1&v1:12])-[#1&v1:13])(-[#6&v4:14])-[#1&v1:15])-[#1&v1:16])(-[#1&v1:17])-[#1&v1:18].[#8&v2:11]=[#8&v2])	1.14_-1_6	cpd00007,cpd14537	1,1		
+29	R07458	cpd14529	3.94200805302231	1	([#6&v4:1]-[#6&v4:2](-[#1&v1:3])(-[#1&v1:4])-[#6@@&v4:5]1(-[#1&v1:6])-[#6@&v4:7](-[#6&v4:8])(-[#6&v4:9])-[#6&v4:10]-[#6@@&v4:11](-[#1&v1:12])(-[#6&v4:13](-[#1&v1:14])(-[#1&v1:15])-[#6&v4:16]-1=[#8&v2:17])-[#6&v4:18])>>([#6&v4:1]-[#6&v4:2](-[#1&v1:3])(-[#1&v1:4])-[#6@@&v4:5]1(-[#1&v1:6])-[#6@&v4:7](-[#6&v4:8])(-[#6&v4:9])-[#6&v4:10]-[#6@@&v4:11](-[#1&v1:12])(-[#6&v4:13](-[#1&v1:14])(-[#1&v1:15])-[#6&v4:16]-1(-[#1&v1])-[#1&v1])-[#6&v4:18].[#8&v2:17]=[#8&v2])	1.14_-1_6	cpd14537,cpd00007	1,1		
+29	R07458	cpd14529	3.96341001568023	0	([#8&v2:1]-[#6&v4:2]1(-[#6&v4:3]-[#6&v4:4](-[#6&v4:5]2(-[#6&v4:6](-[#1&v1:7])(-[#1&v1:8])-[#1&v1:9])-[#6&v4:10](-[#6&v4:11](-[#6&v4:12](-[#6&v4:13](-[#6&v4:14](-[#6&v4:15])(-[#6&v4:16])-[#1&v1:17])(-[#6&v4:18]-2(-[#6&v4:19])-[#1&v1:20])-[#1&v1:21])(-[#1&v1:22])-[#1&v1:23])=[#8&v2:24])(-[#6&v4:25]-1(-[#1&v1:26])-[#1&v1:27])-[#1&v1:28])(-[#1&v1:29])-[#1&v1:30])-[#1&v1:31])>>([#8&v2:1]-[#6&v4:2]1(-[#6&v4:3]-[#6&v4:4](-[#6&v4:5]2(-[#6&v4:6](-[#1&v1:7])(-[#1&v1:8])-[#1&v1:9])-[#6&v4:10](-[#6&v4:11](-[#6&v4:12](-[#6&v4:13](-[#6&v4:14](-[#6&v4:15])(-[#6&v4:16])-[#1&v1:17])(-[#6&v4:18]-2(-[#6&v4:19])-[#1&v1:20])-[#1&v1:21])(-[#1&v1:22])-[#1&v1:23])(-[#1&v1])-[#1&v1])(-[#6&v4:25]-1(-[#1&v1:26])-[#1&v1:27])-[#1&v1:28])(-[#1&v1:29])-[#1&v1:30])-[#1&v1:31].[#8&v2:24]=[#8&v2])	1.14_-1_8	cpd00007,cpd14537	1,1		
+29	R07458	cpd14529	3.89965638030564	1	([#8&v2:1]-[#6@&v4:2]1(-[#1&v1:3])-[#6&v4:4]-[#6&v4:5](-[#1&v1:6])(-[#1&v1:7])-[#6@@&v4:8]2(-[#6&v4:9](-[#1&v1:10])(-[#1&v1:11])-[#1&v1:12])-[#6@@&v4:13](-[#1&v1:14])(-[#6&v4:15](=[#8&v2:16])-[#6&v4:17](-[#1&v1:18])(-[#1&v1:19])-[#6@@&v4:20](-[#1&v1:21])(-[#6@@&v4:22](-[#1&v1:23])(-[#6&v4:24])-[#6&v4:25])-[#6@&v4:26]-2(-[#1&v1:27])-[#6&v4:28])-[#6&v4:29]-1(-[#1&v1:30])-[#1&v1:31])>>([#8&v2:1]-[#6@&v4:2]1(-[#1&v1:3])-[#6&v4:4]-[#6&v4:5](-[#1&v1:6])(-[#1&v1:7])-[#6@@&v4:8]2(-[#6&v4:9](-[#1&v1:10])(-[#1&v1:11])-[#1&v1:12])-[#6@@&v4:13](-[#1&v1:14])(-[#6&v4:15](-[#1&v1])(-[#1&v1])-[#6&v4:17](-[#1&v1:18])(-[#1&v1:19])-[#6@@&v4:20](-[#1&v1:21])(-[#6@@&v4:22](-[#1&v1:23])(-[#6&v4:24])-[#6&v4:25])-[#6@&v4:26]-2(-[#1&v1:27])-[#6&v4:28])-[#6&v4:29]-1(-[#1&v1:30])-[#1&v1:31].[#8&v2:16]=[#8&v2])	1.14_-1_8	cpd14537,cpd00007	1,1		
+29	R07458	cpd14529	3.93535609294557	0	([#8&v2:1](-[#6&v4:2]1(-[#6&v4:3](-[#6&v4:4](-[#6&v4:5]2(-[#6&v4:6](-[#1&v1:7])(-[#1&v1:8])-[#1&v1:9])-[#6&v4:10](-[#6&v4:11](-[#6&v4:12](-[#6&v4:13]3(-[#6&v4:14]4(-[#6&v4:15](-[#6&v4:16]-[#6&v4:17]-[#6&v4:18]-4(-[#1&v1:19])-[#1&v1:20])(-[#6&v4:21])-[#6&v4:22]-[#6&v4:23](-[#6&v4:24]-2-3-[#1&v1:25])(-[#1&v1:26])-[#1&v1:27])-[#1&v1:28])-[#1&v1:29])(-[#1&v1:30])-[#1&v1:31])=[#8&v2:32])(-[#6&v4:33]-1(-[#1&v1:34])-[#1&v1:35])-[#1&v1:36])(-[#1&v1:37])-[#1&v1:38])(-[#1&v1:39])-[#1&v1:40])-[#1&v1:41])-[#1&v1:42])>>([#8&v2:1](-[#6&v4:2]1(-[#6&v4:3](-[#6&v4:4](-[#6&v4:5]2(-[#6&v4:6](-[#1&v1:7])(-[#1&v1:8])-[#1&v1:9])-[#6&v4:10](-[#6&v4:11](-[#6&v4:12](-[#6&v4:13]3(-[#6&v4:14]4(-[#6&v4:15](-[#6&v4:16]-[#6&v4:17]-[#6&v4:18]-4(-[#1&v1:19])-[#1&v1:20])(-[#6&v4:21])-[#6&v4:22]-[#6&v4:23](-[#6&v4:24]-2-3-[#1&v1:25])(-[#1&v1:26])-[#1&v1:27])-[#1&v1:28])-[#1&v1:29])(-[#1&v1:30])-[#1&v1:31])(-[#1&v1])-[#1&v1])(-[#6&v4:33]-1(-[#1&v1:34])-[#1&v1:35])-[#1&v1:36])(-[#1&v1:37])-[#1&v1:38])(-[#1&v1:39])-[#1&v1:40])-[#1&v1:41])-[#1&v1:42].[#8&v2:32]=[#8&v2])	1.14_-1_10	cpd00007,cpd14537	1,1		
+29	R07458	cpd14529	3.87419180467907	1	([#8&v2:1](-[#6@&v4:2]1(-[#1&v1:3])-[#6&v4:4](-[#1&v1:5])(-[#1&v1:6])-[#6&v4:7](-[#1&v1:8])(-[#1&v1:9])-[#6@@&v4:10]2(-[#6&v4:11](-[#1&v1:12])(-[#1&v1:13])-[#1&v1:14])-[#6@@&v4:15](-[#1&v1:16])(-[#6&v4:17](=[#8&v2:18])-[#6&v4:19](-[#1&v1:20])(-[#1&v1:21])-[#6@@&v4:22]3(-[#1&v1:23])-[#6@@&v4:24]4(-[#1&v1:25])-[#6@@&v4:26](-[#6&v4:27])(-[#6&v4:28]-[#6&v4:29]-[#6&v4:30]-4(-[#1&v1:31])-[#1&v1:32])-[#6&v4:33]-[#6&v4:34](-[#1&v1:35])(-[#1&v1:36])-[#6@&v4:37]-2-3-[#1&v1:38])-[#6&v4:39]-1(-[#1&v1:40])-[#1&v1:41])-[#1&v1:42])>>([#8&v2:1](-[#6@&v4:2]1(-[#1&v1:3])-[#6&v4:4](-[#1&v1:5])(-[#1&v1:6])-[#6&v4:7](-[#1&v1:8])(-[#1&v1:9])-[#6@@&v4:10]2(-[#6&v4:11](-[#1&v1:12])(-[#1&v1:13])-[#1&v1:14])-[#6@@&v4:15](-[#1&v1:16])(-[#6&v4:17](-[#1&v1])(-[#1&v1])-[#6&v4:19](-[#1&v1:20])(-[#1&v1:21])-[#6@@&v4:22]3(-[#1&v1:23])-[#6@@&v4:24]4(-[#1&v1:25])-[#6@@&v4:26](-[#6&v4:27])(-[#6&v4:28]-[#6&v4:29]-[#6&v4:30]-4(-[#1&v1:31])-[#1&v1:32])-[#6&v4:33]-[#6&v4:34](-[#1&v1:35])(-[#1&v1:36])-[#6@&v4:37]-2-3-[#1&v1:38])-[#6&v4:39]-1(-[#1&v1:40])-[#1&v1:41])-[#1&v1:42].[#8&v2:18]=[#8&v2])	1.14_-1_10	cpd14537,cpd00007	1,1
+
+=====================================================================
+
+=====================================================================
+SELECT COUNT(*) FROM (
+    select rl_rxn.reaction_id,rl_rxn.repo_rxn_id,rl_rxn.repo_substrate_id,rl_rxn.score,rl_rxn.isStereo,rl_rxn.SMARTS,rl_rxn.formatted_Name,
+    product_info.repo_prod_ids, product_info.prod_stoichios,rxn_substrates.substrate_inchi,rxn_substrates.substrate_cpd_ids,
+    rxn_products.product_inchi,rxn_products.product_cpd_ids
+    from 
+    (
+        select rl.reaction_id,rxn.repo_rxn_id,rl.substrate_id,rl.repo_substrate_id,rl.score,rl.isStereo,rl.SMARTS,
+        rl.diameter,rxn.ec_number||'_'||rl.direction||'_'||rl.diameter as formatted_Name
+        from
+            (
+                select r.reaction_id, r.substrate_id,cs_info.repo_cpd_id as repo_substrate_id,r.score, r.isStereo,
+                s.smarts_string as SMARTS,r.diameter,r.direction
+                from rules r, smarts s,
+                (
+                    select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                    from chemical_species cs
+                ) as cs_info
+                where s.id=r.smarts_id and cs_info.id=r.substrate_id
+             ) as rl,
+             (
+                select rxn_info.id, rxn_info.repo_rxn_id,er.ec_number
+                from ec_reactions er,
+                (
+                    select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+                    from reactions rxn1
+                ) as rxn_info
+                where er.reaction_id=rxn_info.id
+             ) as rxn
+        where rl.reaction_id=rxn.id
+    ) as rl_rxn,
+    (
+        select reaction_id,substrate_id,diameter,isStereo,group_concat(repo_prod_id) as repo_prod_ids,group_concat(prod_stoichio) as prod_stoichios
+        from 
+        ( 
+            select rp.reaction_id, rp.substrate_id, rp.diameter,rp.isStereo, cs_info1.repo_cpd_id as repo_prod_id, rp.stochiometry as prod_stoichio
+            from rule_products rp,
+            (
+                select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                from chemical_species cs
+            ) as cs_info1
+            where rp.product_id=cs_info1.id
+        )
+        group by reaction_id,substrate_id,diameter,isStereo
+    ) as product_info,
+    (
+        select reaction_id, group_concat(distinct inchi_key) as substrate_inchi,group_concat(distinct cpd_id) as substrate_cpd_ids
+        from
+        (
+            select rxn.id as reaction_id, cs_info.inchi_key,cs_info.cpd_id
+            from reactions rxn, reaction_substrates rs,
+            (
+                select distinct cs.id as chem_sp_id, cs.inchi_key,ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as cpd_id
+                from chemical_species cs
+                where cs.inchi_key not null
+            ) as cs_info
+            where rxn.id=rs.reaction_id and rs.chemical_id=cs_info.chem_sp_id
+            and rs.chemical_id not in (select distinct substrate_id from rules r)
+        )
+        group by reaction_id
+    ) as rxn_substrates,
+    (
+        select reaction_id, group_concat(distinct inchi_key) as product_inchi,group_concat(distinct cpd_id) as product_cpd_ids
+        from
+        (
+            select rxn.id as reaction_id, cs_info.inchi_key,cs_info.cpd_id
+            from reactions rxn, reaction_products rp,
+            (
+                select distinct cs.id as chem_sp_id, cs.inchi_key,ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as cpd_id
+                from chemical_species cs
+                where cs.inchi_key not null
+            ) as cs_info
+            where rxn.id=rp.reaction_id and rp.chemical_id=cs_info.chem_sp_id
+            and rp.chemical_id not in (select distinct substrate_id from rules r)
+        )
+        group by reaction_id
+    ) as rxn_products
+    where rl_rxn.reaction_id=product_info.reaction_id and
+    rl_rxn.substrate_id=product_info.substrate_id and
+    rl_rxn.diameter=product_info.diameter and
+    rl_rxn.isStereo=product_info.isStereo and
+    rl_rxn.reaction_id=rxn_substrates.reaction_id and
+    rl_rxn.reaction_id=rxn_products.reaction_id 
+);
+
+
+/******************Outside Example 1******************/
+In one SQLite (sqlite3 on android) database there is a table like so
+
+company |  name    | job
+--------------------------
+      1 |  'Peter' | 'Manager'
+      1 |  'Jim'   | (null)
+      2 |  'John'  | 'CEO'
+      2 |  'Alex'  | 'Developer'
+      3 |  'Lisa'  | (null)
+
+and we'd like to get to
+
+company | formated
+--------------------------------------
+      1 | 'Peter (Manager), Jim'
+      2 | 'John (CEO), Alex (Developer)'
+      3 | 'Lisa'
+
+Using the following query:
+
+SELECT 
+    company,
+    group_concat(concat) AS formated
+FROM (
+    SELECT
+        company,
+        CASE 
+            WHEN job IS NULL THEN name
+            ELSE name || ' (' || job || ')'
+        END AS concat
+    FROM jobs
+)
+GROUP BY company
+
+/******************Outside Example 2******************/
+A) SQLite group_concat()
+sqlite> SELECT pub_id,group_concat(cate_id)
+   ...> FROM book_mast
+   ...> GROUP BY pub_id;
+pub_id      group_concat(cate_id)
+----------  ---------------------
+P001        CA002,CA004
+P002        CA003,CA003
+P003        CA001,CA003
+P004        CA002,CA005
+P005        CA001,CA004
+P006        CA001,CA005
+P007        CA005,CA002
+P008        CA004,CA005
+
+B) SQLite group_concat() with order by
+sqlite> SELECT pub_id,group_concat(DISTINCT cate_id)
+   ...> FROM book_mast
+   ...> GROUP BY pub_id
+   ...> ORDER BY group_concat(DISTINCT cate_id) ASC;
+pub_id      group_concat(DISTINCT cate_id)
+----------  ------------------------------
+P003        CA001,CA003
+P005        CA001,CA004
+P006        CA001,CA005
+P001        CA002,CA004
+P004        CA002,CA005
+P002        CA003
+P008        CA004,CA005
+P007        CA005,CA002
+
+
+C) SQLite group_concat() with group by
+SQLite group_concat() with distinct
+sqlite> SELECT pub_id,group_concat(DISTINCT cate_id)
+   ...> FROM book_mast
+   ...> GROUP BY pub_id;
+pub_id      group_concat(DISTINCT cate_id)
+----------  ------------------------------
+P001        CA002,CA004
+P002        CA003
+P003        CA001,CA003
+P004        CA002,CA005
+P005        CA001,CA004
+P006        CA001,CA005
+P007        CA005,CA002
+P008        CA004,CA005

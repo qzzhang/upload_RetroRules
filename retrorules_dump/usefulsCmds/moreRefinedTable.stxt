@@ -1,0 +1,886 @@
+/**
+it's important to realize that each set of rules from was constructed from a specific existing reaction. Imagine: A + B + C => D + E
+
+Now, imagine C and E are cofactors, and A, B, and D are main substrates.
+
+In Foulon's method, he only allows one reactant in a reaction to be "anything", so when you have multiple reactants (as we do in this case), he fixes one.
+However, his "rules" only "touch" the compounds in the reaction that are allowed to vary. Invariant compounds are left out, meaning a reaction compiled
+purely from his rules will be incomplete.
+
+So in our example, he will make two different sets of rules. One where A can be anything, and B is fixed, and one where B can be anything, and A is fixed.
+In case one, "A" will be a rule substrate and "D" will be a rule product. However, A and B and C will be reaction substrates, and D and E will be reaction products.
+
+Now I hope it's a little more clear why I asked you to add the additional reaction and product lists. Basically, we will run Foulon's rule, which will
+make only a partial reaction. If we add the reactants and products listed in your additional columns, we should be able to complete the reaction.
+**/
+
+=============================================================================================================================================
+/***************************************************************
+1) Get a table that contains one rule per row that has its rule substates/reactants, rule products,SMARTS, and other rule data fields:
+*/
+/*
+1.1) Looking at the primary keys of the table rule=>(reaction_id, substrate_id, diameter, isStereo) and counts of the following:
+*/
+sqlite> select count(*) from rules;
+count(*)
+652152
+
+SELECT COUNT(*) FROM (
+    (
+        select r.reaction_id,r.score,r.isStereo,s.smarts_string as SMARTS,r.diameter,r.direction,
+        cs_info.repo_cpd_id as rule_substrate_id
+        from rules r, smarts s,
+        (
+            select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+            from chemical_species cs
+        ) as cs_info
+        where s.id=r.smarts_id and cs_info.id=r.substrate_id
+     ) as rl
+);//652152
+
+SELECT COUNT(*) FROM (
+    (
+        select reaction_id,substrate_id,diameter,isStereo,
+        group_concat(repo_cpd_id) as rule_prod_ids,
+        group_concat(prod_stoichio) as rule_prod_stoichios
+        from 
+        ( 
+            select rp.reaction_id, rp.substrate_id, rp.diameter,rp.isStereo,
+            cs_info1.repo_cpd_id, rp.stochiometry as prod_stoichio
+            from rule_products rp,
+            (
+                select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                from chemical_species cs
+            ) as cs_info1
+            where rp.product_id=cs_info1.id
+        )
+        group by reaction_id,substrate_id,diameter,isStereo
+    ) as product_per_rxn_sub_dia_isStereo
+);//652152
+
+/*
+1.2) We should be able to insert the grouped columns of rule_prod_ids and rule_prod_stoichios from table product_per_rxn_sub_dia_isStereo 
+into table rl by an inner join. Calling the resulting table 'rl_info'.
+*/
+SELECT COUNT(*) FROM (
+    (
+    select rl.reaction_id,rl.substrate_id,rl.rule_substrate_cpd,rl.diameter,rl.isStereo,rl.score,rl.SMARTS,rl.direction,
+    product_per_rxn_sub_dia_isStereo.rule_prod_ids,product_per_rxn_sub_dia_isStereo.rule_prod_stoichios
+    from
+    (
+        select r.reaction_id,r.substrate_id,r.score,r.isStereo,s.smarts_string as SMARTS,r.diameter,r.direction,
+        cs_info.repo_cpd_id as rule_substrate_cpd
+        from rules r, smarts s,
+        (
+            select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+            from chemical_species cs
+        ) as cs_info
+        where s.id=r.smarts_id and cs_info.id=r.substrate_id
+    ) as rl,
+    (
+        select reaction_id,substrate_id,diameter,isStereo,group_concat(repo_prod_id) as rule_prod_ids,group_concat(prod_stoichio) as rule_prod_stoichios
+        from 
+        ( 
+            select rp.reaction_id, rp.substrate_id, rp.diameter,rp.isStereo, cs_info1.repo_cpd_id as repo_prod_id, rp.stochiometry as prod_stoichio
+            from rule_products rp,
+            (
+                select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                from chemical_species cs
+            ) as cs_info1
+            where rp.product_id=cs_info1.id
+        )
+        group by reaction_id,substrate_id,diameter,isStereo
+    ) as product_per_rxn_sub_dia_isStereo
+    where (rl.reaction_id=product_per_rxn_sub_dia_isStereo.reaction_id and
+    rl.substrate_id=product_per_rxn_sub_dia_isStereo.substrate_id and
+    rl.diameter=product_per_rxn_sub_dia_isStereo.diameter and
+    rl.isStereo=product_per_rxn_sub_dia_isStereo.isStereo)
+    ) as rl_info
+);//652152
+
+/*
+2) We should be able to join the reaction related tables: reactions, reaction_substrates, reaction_products and chemical_species to build
+a new table called 'rxn_info'.
+*/
+
+//2.1) sub sub tables
+
+SELECT COUNT(*) FROM (
+    select rxn2.id, rxn2.repo_rxn_id,er.ec_number
+    from 
+    (
+        select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+        from reactions rxn1
+     ) as rxn2
+     left join ec_reactions er
+     on er.reaction_id=rxn2.id
+);//46798
+
+SELECT COUNT(*) FROM (
+    select rs.reaction_id, cs_info.cpd_id,rs.chemical_id
+    from 
+    (
+        select distinct cs.id as chem_sp_id, cs.inchi_key,ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as cpd_id
+        from chemical_species cs
+    ) as cs_info, reaction_substrates rs
+    where rs.chemical_id=cs_info.chem_sp_id
+);//100166
+
+SELECT COUNT(*) FROM (
+    select rp.reaction_id, cs_info.cpd_id,rp.chemical_id
+    from 
+    (
+        select distinct cs.id as chem_sp_id, cs.inchi_key,ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as cpd_id
+        from chemical_species cs
+    ) as cs_info, reaction_products rp
+    where rp.chemical_id=cs_info.chem_sp_id
+);//102628
+
+//2.2) left join sub sub tables into sub tables
+SELECT COUNT(*) FROM (
+    select rxn.id, rxn.repo_rxn_id,group_concat(distinct rxn.ec_number) as ec_numbers,
+    group_concat(distinct rxn_substrates.substrate_cpd) as substrsate_ids
+    from 
+    (
+        select rxn2.id, rxn2.repo_rxn_id,er.ec_number
+        from 
+        (
+            select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+            from reactions rxn1
+        ) as rxn2
+        left join ec_reactions er
+        on er.reaction_id=rxn2.id
+    ) as rxn
+    left join
+    (
+        select rs.reaction_id, cs_info.cpd_id as substrate_cpd,rs.chemical_id
+        from 
+        (
+            select distinct cs.id as chem_sp_id, cs.inchi_key,ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as cpd_id
+            from chemical_species cs
+        ) as cs_info, reaction_substrates rs
+        where rs.chemical_id=cs_info.chem_sp_id 
+    ) as rxn_substrates
+    on rxn.id=rxn_substrates.reaction_id
+    group by rxn.id
+);//43269
+
+SELECT COUNT(*) FROM (
+    select rxn.id, rxn.repo_rxn_id,group_concat(distinct rxn.ec_number) as ec_numbers,
+    group_concat(distinct rxn_products.product_cpd) as product_ids
+    from 
+    (
+        select rxn2.id, rxn2.repo_rxn_id,er.ec_number
+        from 
+        (
+            select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+            from reactions rxn1
+        ) as rxn2
+        left join ec_reactions er
+        on er.reaction_id=rxn2.id
+    ) as rxn
+    left join
+    (
+        select rp.reaction_id, cs_info.cpd_id as product_cpd,rp.chemical_id
+        from 
+        (
+            select distinct cs.id as chem_sp_id, cs.inchi_key,ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as cpd_id
+            from chemical_species cs
+        ) as cs_info, reaction_products rp
+        where rp.chemical_id=cs_info.chem_sp_id 
+    ) as rxn_products
+    on rxn.id=rxn_products.reaction_id
+    group by rxn.id
+);//43269
+
+//2.3) join sub tables into one table
+SELECT COUNT(*) FROM (
+    (
+    select rxn_substrates_tab.id,rxn_substrates_tab.repo_rxn_id,
+    rxn_substrates_tab.substrate_ids,rxn_products_tab.product_ids
+    from
+    (
+        select rxn.id, rxn.repo_rxn_id,group_concat(distinct rxn.ec_number) as ec_numbers,
+        group_concat(distinct rxn_substrates.substrate_cpd) as substrate_ids
+        from 
+        (
+            select rxn2.id, rxn2.repo_rxn_id,er.ec_number
+            from 
+            (
+                select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+                from reactions rxn1
+            ) as rxn2
+            left join ec_reactions er
+            on er.reaction_id=rxn2.id
+        ) as rxn
+        left join
+        (
+            select rs.reaction_id, cs_info.cpd_id as substrate_cpd,rs.chemical_id
+            from 
+            (
+                select distinct cs.id as chem_sp_id, cs.inchi_key,ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as cpd_id
+                from chemical_species cs
+            ) as cs_info, reaction_substrates rs
+            where rs.chemical_id=cs_info.chem_sp_id 
+        ) as rxn_substrates
+        on rxn.id=rxn_substrates.reaction_id
+        group by rxn.id
+    ) as rxn_substrates_tab,
+    (
+        select rxn.id, rxn.repo_rxn_id,group_concat(distinct rxn.ec_number) as ec_numbers,
+        group_concat(distinct rxn_products.product_cpd) as product_ids
+        from 
+        (
+            select rxn2.id, rxn2.repo_rxn_id,er.ec_number
+            from 
+            (
+                select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+                from reactions rxn1
+            ) as rxn2
+            left join ec_reactions er
+            on er.reaction_id=rxn2.id
+        ) as rxn
+        left join
+        (
+            select rp.reaction_id, cs_info.cpd_id as product_cpd,rp.chemical_id
+            from 
+            (
+                select distinct cs.id as chem_sp_id, cs.inchi_key,ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as cpd_id
+                from chemical_species cs
+            ) as cs_info, reaction_products rp
+            where rp.chemical_id=cs_info.chem_sp_id 
+        ) as rxn_products
+        on rxn.id=rxn_products.reaction_id
+        group by rxn.id
+    ) as rxn_products_tab
+    where rxn_substrates_tab.id=rxn_products_tab.id
+    ) as rxn_info
+);//43269
+
+/*
+3) Now combine table 'rl_info' with table 'rxn_info' to get the finnal tables--one with one reaction per row and the other with one rule per row.
+*/
+//3.1) for one reaction per row, we need to group the rl_info by reaction_id before left join with rxn_info
+SELECT COUNT(*) FROM (
+    select rl_info.reaction_id,
+    group_concat(distinct rl_info.substrate_id) as rule_substrate_ids,
+    group_concat(distinct rl_info.rule_substrate_cpd) as rule_substrate_cpds,
+    group_concat(distinct rl_info.isStereo) as isStereos,
+    group_concat(distinct rl_info.score) as scores,
+    group_concat(distinct rl_info.SMARTS) as SMARTS_arr,
+    group_concat(distinct rl_info.formatted_name) as formatted_names_arr,
+    group_concat(distinct rl_info.rule_prod_ids) as rule_prod_ids_arr,
+    group_concat(distinct rl_info.rule_prod_stoichios) as rule_prod_stoichios_arr
+    from  
+    (
+        select rl.reaction_id,rl.substrate_id,rl.rule_substrate_cpd,rl.diameter || '_' || rl.direction as formatted_name,rl.isStereo,rl.score,rl.SMARTS,
+        product_per_rxn_sub_dia_isStereo.rule_prod_ids,product_per_rxn_sub_dia_isStereo.rule_prod_stoichios
+        from
+        (
+            select r.reaction_id,r.substrate_id,r.score,r.isStereo,s.smarts_string as SMARTS,r.diameter,r.direction,
+            cs_info.repo_cpd_id as rule_substrate_cpd
+            from rules r, smarts s,
+            (
+                select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                from chemical_species cs
+            ) as cs_info
+            where s.id=r.smarts_id and cs_info.id=r.substrate_id
+        ) as rl,
+        (
+            select reaction_id,substrate_id,diameter,isStereo,
+            group_concat(repo_prod_id,'|') as rule_prod_ids,
+            group_concat(prod_stoichio,'|') as rule_prod_stoichios
+            from 
+            ( 
+                select rp.reaction_id, rp.substrate_id, rp.diameter,rp.isStereo, cs_info1.repo_cpd_id as repo_prod_id, rp.stochiometry as prod_stoichio
+                from rule_products rp,
+                (
+                    select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                    from chemical_species cs
+                ) as cs_info1
+                where rp.product_id=cs_info1.id
+            )
+            group by reaction_id,substrate_id,diameter,isStereo
+        ) as product_per_rxn_sub_dia_isStereo
+        where (rl.reaction_id=product_per_rxn_sub_dia_isStereo.reaction_id and
+        rl.substrate_id=product_per_rxn_sub_dia_isStereo.substrate_id and
+        rl.diameter=product_per_rxn_sub_dia_isStereo.diameter and
+        rl.isStereo=product_per_rxn_sub_dia_isStereo.isStereo)
+    ) as rl_info
+    group by rl_info.reaction_id
+);//16999
+
+//3.2) left joining to get all reactions with rules/reactants/products/ one reaction per row:
+SELECT COUNT(*) FROM (
+    select rxn_info.id,rxn_info.repo_rxn_id,rxn_info.ec_numbers,rl_info1.rule_substrate_ids,rl_info1.rule_substrate_cpds,
+    rl_info1.formatted_names_arr,rl_info1.isStereos,rl_info1.scores,rl_info1.SMARTS_arr,rl_info1.rule_prod_ids_arr,
+    rl_info1.rule_prod_stoichios_arr,rxn_info.rxn_substrate_ids,rxn_info.rxn_substrate_inchis,
+    rxn_info.rxn_product_ids,rxn_info.rxn_product_inchis 
+    from
+    (
+        select rxn_substrates_tab.id,rxn_substrates_tab.repo_rxn_id,rxn_substrates_tab.ec_numbers,
+        rxn_substrates_tab.substrate_ids as rxn_substrate_ids,rxn_substrates_tab.substrate_inchi_keys as rxn_substrate_inchis,
+        rxn_products_tab.product_ids as rxn_product_ids,rxn_products_tab.product_inchi_keys as rxn_product_inchis
+        from
+        (
+            select rxn.id, rxn.repo_rxn_id,group_concat(distinct rxn.ec_number) as ec_numbers,
+            group_concat(distinct rxn_substrates.substrate_cpd) as substrate_ids,
+            group_concat(distinct rxn_substrates.inchi_key) as substrate_inchi_keys
+            from 
+            (
+                select rxn2.id, rxn2.repo_rxn_id,er.ec_number
+                from 
+                (
+                    select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+                    from reactions rxn1
+                ) as rxn2
+                left join ec_reactions er
+                on er.reaction_id=rxn2.id
+            ) as rxn
+            left join
+            (
+                select rs.reaction_id, cs_info.cpd_id as substrate_cpd,rs.chemical_id,cs_info.inchi_key
+                from 
+                (
+                    select distinct cs.id as chem_sp_id, cs.inchi_key,ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as cpd_id
+                    from chemical_species cs
+                ) as cs_info, reaction_substrates rs
+                where rs.chemical_id=cs_info.chem_sp_id
+                and rs.chemical_id not in (select distinct substrate_id from rules r)
+            ) as rxn_substrates
+            on rxn.id=rxn_substrates.reaction_id
+            group by rxn.id
+        ) as rxn_substrates_tab,
+        (
+            select rxn.id, rxn.repo_rxn_id,group_concat(distinct rxn.ec_number) as ec_numbers,
+            group_concat(distinct rxn_products.product_cpd) as product_ids,
+            group_concat(distinct rxn_products.inchi_key) as product_inchi_keys 
+            from 
+            (
+                select rxn2.id, rxn2.repo_rxn_id,er.ec_number
+                from 
+                (
+                    select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+                    from reactions rxn1
+                ) as rxn2
+                left join ec_reactions er
+                on er.reaction_id=rxn2.id
+            ) as rxn
+            left join
+            (
+                select rp.reaction_id, cs_info.cpd_id as product_cpd,rp.chemical_id,cs_info.inchi_key
+                from 
+                (
+                    select distinct cs.id as chem_sp_id, cs.inchi_key,ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as cpd_id
+                    from chemical_species cs
+                ) as cs_info, reaction_products rp
+                where rp.chemical_id=cs_info.chem_sp_id
+                and rp.chemical_id not in (select distinct product_id from rule_products)
+            ) as rxn_products
+            on rxn.id=rxn_products.reaction_id
+            group by rxn.id
+        ) as rxn_products_tab
+        where rxn_substrates_tab.id=rxn_products_tab.id
+    ) as rxn_info
+    left join
+    (
+        select rl_info.reaction_id,
+        group_concat(distinct rl_info.substrate_id) as rule_substrate_ids,
+        group_concat(distinct rl_info.rule_substrate_cpd) as rule_substrate_cpds,
+        group_concat(distinct rl_info.isStereo) as isStereos,
+        group_concat(distinct rl_info.score) as scores,
+        group_concat(distinct rl_info.SMARTS) as SMARTS_arr,
+        group_concat(distinct rl_info.formatted_name) as formatted_names_arr,
+        group_concat(distinct rl_info.rule_prod_ids) as rule_prod_ids_arr,
+        group_concat(distinct rl_info.rule_prod_stoichios) as rule_prod_stoichios_arr
+        from  
+        (
+            select rl.reaction_id,rl.substrate_id,rl.rule_substrate_cpd,rl.diameter || '_' || rl.direction as formatted_name,rl.isStereo,rl.score,rl.SMARTS,
+            product_per_rxn_sub_dia_isStereo.rule_prod_ids,product_per_rxn_sub_dia_isStereo.rule_prod_stoichios
+            from
+            (
+                select r.reaction_id,r.substrate_id,r.score,r.isStereo,s.smarts_string as SMARTS,r.diameter,r.direction,
+                cs_info.repo_cpd_id as rule_substrate_cpd
+                from rules r, smarts s,
+                (
+                    select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                    from chemical_species cs
+                ) as cs_info
+                where s.id=r.smarts_id and cs_info.id=r.substrate_id
+            ) as rl,
+            (
+                select reaction_id,substrate_id,diameter,isStereo,
+                group_concat(repo_prod_id,'|') as rule_prod_ids,
+                group_concat(prod_stoichio,'|') as rule_prod_stoichios
+                from 
+                ( 
+                    select rp.reaction_id, rp.substrate_id, rp.diameter,rp.isStereo, cs_info1.repo_cpd_id as repo_prod_id, rp.stochiometry as prod_stoichio
+                    from rule_products rp,
+                    (
+                        select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                        from chemical_species cs
+                    ) as cs_info1
+                    where rp.product_id=cs_info1.id
+                )
+                group by reaction_id,substrate_id,diameter,isStereo
+            ) as product_per_rxn_sub_dia_isStereo
+            where (rl.reaction_id=product_per_rxn_sub_dia_isStereo.reaction_id and
+            rl.substrate_id=product_per_rxn_sub_dia_isStereo.substrate_id and
+            rl.diameter=product_per_rxn_sub_dia_isStereo.diameter and
+            rl.isStereo=product_per_rxn_sub_dia_isStereo.isStereo)
+        ) as rl_info
+        group by rl_info.reaction_id
+    ) as rl_info1
+    on rxn_info.id=rl_info1.reaction_id
+//);//43269
+where rl_info1.rule_substrate_ids not null
+//);//16999
+where rl_info1.rule_substrate_ids not null
+and rxn_info.repo_rxn_id like 'rxn1%'
+);//1127
+
+/***********************************************************************************************************/
+/**
+   3.3) left joining to get all rules with rules/reactants/products/ one (rule-substrate,direction,diameter,
+        isStereo) per row.
+*/
+//3.3.1) Remove grouping rules by reaction:
+SELECT COUNT(*) FROM
+    (
+        select rl_info.reaction_id,rl_info.substrate_id as rule_substrate_id,rl_info.rule_substrate_cpd,rl_info.direction,
+        rl_info.diameter,rl_info.isStereo,rl_info.score,rl_info.SMARTS,rl_info.rule_prod_ids,rl_info.rule_prod_stoichios
+        from  
+        (
+            select rl.reaction_id,rl.substrate_id,rl.rule_substrate_cpd,rl.diameter,rl.direction,rl.isStereo,rl.score,rl.SMARTS,
+            product_per_rxn_sub_dia_isStereo.rule_prod_ids,product_per_rxn_sub_dia_isStereo.rule_prod_stoichios
+            from
+            (
+                select r.reaction_id,r.substrate_id,r.score,r.isStereo,s.smarts_string as SMARTS,r.diameter,r.direction,
+                cs_info.repo_cpd_id as rule_substrate_cpd
+                from rules r, smarts s,
+                (
+                    select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                    from chemical_species cs
+                ) as cs_info
+                where s.id=r.smarts_id and cs_info.id=r.substrate_id
+            ) as rl,
+            (
+                select reaction_id,substrate_id,diameter,isStereo,
+                group_concat(distinct repo_prod_id) as rule_prod_ids,
+                group_concat(distinct prod_stoichio) as rule_prod_stoichios
+                from 
+                ( 
+                    select rp.reaction_id, rp.substrate_id, rp.diameter,rp.isStereo, cs_info1.repo_cpd_id as repo_prod_id, rp.stochiometry as prod_stoichio
+                    from rule_products rp,
+                    (
+                        select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                        from chemical_species cs
+                    ) as cs_info1
+                    where rp.product_id=cs_info1.id
+                )
+                group by reaction_id,substrate_id,diameter,isStereo
+            ) as product_per_rxn_sub_dia_isStereo
+            where (rl.reaction_id=product_per_rxn_sub_dia_isStereo.reaction_id and
+            rl.substrate_id=product_per_rxn_sub_dia_isStereo.substrate_id and
+            rl.diameter=product_per_rxn_sub_dia_isStereo.diameter and
+            rl.isStereo=product_per_rxn_sub_dia_isStereo.isStereo)
+        ) as rl_info
+    );//652152
+        where rl_info.diameter=2
+    );//81519
+        where rl_info.diameter=4
+    );//81519
+        where rl_info.diameter=6
+    );//81519
+        where rl_info.diameter=8
+    );//81519
+        where rl_info.diameter=10
+    );//81519
+        where rl_info.diameter=12
+    );//81519
+        where rl_info.diameter=14
+    );//81519
+        where rl_info.diameter=16
+    );//81519
+
+//3.3.2) Left join rl_info1 with rxn_info, as opposed to rxn_info left-joining rl_info1:
+SELECT COUNT(*) FROM (
+    select rl_info1.reaction_id,rxn_info.repo_rxn_id,rxn_info.ec_numbers,rl_info1.rule_substrate_id,rl_info1.rule_substrate_cpd,
+    rl_info1.direction,rl_info1.diameter,rl_info1.isStereo,rl_info1.score,rl_info1.SMARTS, 'Any' as Reactants, 'Any;Any' as Products,
+    rl_info1.rule_prod_ids,rl_info1.rule_prod_stoichios,rxn_info.rxn_substrate_ids,rxn_info.rxn_substrate_inchis,
+    rxn_info.rxn_product_ids,rxn_info.rxn_product_inchis 
+    from
+    (
+        select rl_info.reaction_id,rl_info.substrate_id as rule_substrate_id,rl_info.rule_substrate_cpd,rl_info.direction,
+        rl_info.diameter,rl_info.isStereo,rl_info.score,rl_info.SMARTS,rl_info.rule_prod_ids,rl_info.rule_prod_stoichios
+        from  
+        (
+            select rl.reaction_id,rl.substrate_id,rl.rule_substrate_cpd,rl.diameter,rl.direction,rl.isStereo,rl.score,rl.SMARTS,
+            product_per_rxn_sub_dia_isStereo.rule_prod_ids,product_per_rxn_sub_dia_isStereo.rule_prod_stoichios
+            from
+            (
+                select r.reaction_id,r.substrate_id,r.score,r.isStereo,s.smarts_string as SMARTS,r.diameter,r.direction,
+                cs_info.repo_cpd_id as rule_substrate_cpd
+                from rules r, smarts s,
+                (
+                    select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                    from chemical_species cs
+                ) as cs_info
+                where s.id=r.smarts_id and cs_info.id=r.substrate_id
+            ) as rl,
+            (
+                select reaction_id,substrate_id,diameter,isStereo,
+                group_concat(distinct repo_prod_id) as rule_prod_ids,
+                group_concat(distinct prod_stoichio) as rule_prod_stoichios
+                from 
+                ( 
+                    select rp.reaction_id, rp.substrate_id, rp.diameter,rp.isStereo, cs_info1.repo_cpd_id as repo_prod_id, rp.stochiometry as prod_stoichio
+                    from rule_products rp,
+                    (
+                        select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                        from chemical_species cs
+                    ) as cs_info1
+                    where rp.product_id=cs_info1.id
+                )
+                group by reaction_id,substrate_id,diameter,isStereo
+            ) as product_per_rxn_sub_dia_isStereo
+            where (rl.reaction_id=product_per_rxn_sub_dia_isStereo.reaction_id and
+            rl.substrate_id=product_per_rxn_sub_dia_isStereo.substrate_id and
+            rl.diameter=product_per_rxn_sub_dia_isStereo.diameter and
+            rl.isStereo=product_per_rxn_sub_dia_isStereo.isStereo)
+        ) as rl_info
+        where rl_info.diameter=10
+    ) as rl_info1
+    left join
+    (
+        select rxn_substrates_tab.id,rxn_substrates_tab.repo_rxn_id,rxn_substrates_tab.ec_numbers,
+        rxn_substrates_tab.substrate_ids as rxn_substrate_ids,rxn_substrates_tab.substrate_inchi_keys as rxn_substrate_inchis,
+        rxn_products_tab.product_ids as rxn_product_ids,rxn_products_tab.product_inchi_keys as rxn_product_inchis
+        from
+        (
+            select rxn.id, rxn.repo_rxn_id,group_concat(distinct rxn.ec_number) as ec_numbers,
+            group_concat(distinct rxn_substrates.substrate_cpd) as substrate_ids,
+            group_concat(distinct rxn_substrates.inchi_key) as substrate_inchi_keys
+            from 
+            (
+                select rxn2.id, rxn2.repo_rxn_id,er.ec_number
+                from 
+                (
+                    select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+                    from reactions rxn1
+                ) as rxn2
+                left join ec_reactions er
+                on er.reaction_id=rxn2.id
+            ) as rxn
+            left join
+            (
+                select rs.reaction_id, cs_info.cpd_id as substrate_cpd,rs.chemical_id,cs_info.inchi_key
+                from 
+                (
+                    select distinct cs.id as chem_sp_id, cs.inchi_key,ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as cpd_id
+                    from chemical_species cs
+                ) as cs_info, reaction_substrates rs
+                where rs.chemical_id=cs_info.chem_sp_id
+                and rs.chemical_id not in (select distinct substrate_id from rules r)
+            ) as rxn_substrates
+            on rxn.id=rxn_substrates.reaction_id
+            group by rxn.id
+        ) as rxn_substrates_tab,
+        (
+            select rxn.id, rxn.repo_rxn_id,group_concat(distinct rxn.ec_number) as ec_numbers,
+            group_concat(distinct rxn_products.product_cpd) as product_ids,
+            group_concat(distinct rxn_products.inchi_key) as product_inchi_keys 
+            from 
+            (
+                select rxn2.id, rxn2.repo_rxn_id,er.ec_number
+                from 
+                (
+                    select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+                    from reactions rxn1
+                ) as rxn2
+                left join ec_reactions er
+                on er.reaction_id=rxn2.id
+            ) as rxn
+            left join
+            (
+                select rp.reaction_id, cs_info.cpd_id as product_cpd,rp.chemical_id,cs_info.inchi_key
+                from 
+                (
+                    select distinct cs.id as chem_sp_id, cs.inchi_key,ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as cpd_id
+                    from chemical_species cs
+                ) as cs_info, reaction_products rp
+                where rp.chemical_id=cs_info.chem_sp_id
+                and rp.chemical_id not in (select distinct product_id from rule_products)
+            ) as rxn_products
+            on rxn.id=rxn_products.reaction_id
+            group by rxn.id
+        ) as rxn_products_tab
+        where rxn_substrates_tab.id=rxn_products_tab.id
+    ) as rxn_info
+    on rxn_info.id=rl_info1.reaction_id
+    where rxn_info.repo_rxn_id like 'rxn1%'
+);//
+
+/****************************************************After feedback from James******************************************************/
+//3.3.3) Left join rl_info1 with rxn_info, as opposed to rxn_info (full set of substrates/products) left-joining rl_info1:
+SELECT COUNT(*) FROM (
+    select rl_info1.reaction_id,rxn_info.repo_rxn_id,rxn_info.ec_numbers,rl_info1.rule_substrate_id,rl_info1.rule_substrate_cpd,
+    rl_info1.direction,rl_info1.diameter,rl_info1.isStereo,rl_info1.score,rl_info1.SMARTS, 'Any' as Reactants,
+    rl_info1.rule_prod_ids,rl_info1.rule_prod_stoichios,rxn_info.rxn_substrate_ids,rxn_info.rxn_substrate_inchis,
+    rxn_info.rxn_product_ids,rxn_info.rxn_product_inchis,rl_info1.total_stoichios,
+    (select '<'||rl_info1.reaction_id||'|'||rxn_info.repo_rxn_id||'|'||rl_info1.rule_substrate_cpd||'|'||rl_info1.diameter||'|'||
+        (SELECT 
+          CASE 
+            WHEN rl_info1.direction=-1 THEN 'reverse'
+            ELSE 'forward'
+        END) ||
+        (SELECT 
+          CASE 
+            WHEN rl_info1.isStereo=1 THEN '|'||'isStereo'||'>'
+            ELSE ''||'>'
+        END) as Name)
+    from
+    (
+        select rl_info.reaction_id,rl_info.substrate_id as rule_substrate_id,rl_info.rule_substrate_cpd,rl_info.direction,
+        rl_info.diameter,rl_info.isStereo,rl_info.score,rl_info.SMARTS,rl_info.rule_prod_ids,
+        rl_info.rule_prod_stoichios,rl_info.total_stoichios
+        from  
+        (
+            select rl.reaction_id,rl.substrate_id,rl.rule_substrate_cpd,rl.diameter,rl.direction,rl.isStereo,rl.score,rl.SMARTS,
+            product_per_rxn_sub_dia_isStereo.rule_prod_ids,product_per_rxn_sub_dia_isStereo.rule_prod_stoichios,
+            product_per_rxn_sub_dia_isStereo.total_stoichios
+            from
+            (
+                select r.reaction_id,r.substrate_id,r.score,r.isStereo,s.smarts_string as SMARTS,r.diameter,r.direction,
+                cs_info.repo_cpd_id as rule_substrate_cpd
+                from rules r, smarts s,
+                (
+                    select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                    from chemical_species cs
+                ) as cs_info
+                where s.id=r.smarts_id and cs_info.id=r.substrate_id
+            ) as rl,
+            (
+                select reaction_id,substrate_id,diameter,isStereo,
+                group_concat(repo_prod_id) as rule_prod_ids,
+                group_concat(prod_stoichio) as rule_prod_stoichios,
+                sum(prod_stoichio) as total_stoichios
+                from 
+                ( 
+                    select rp.reaction_id, rp.substrate_id, rp.diameter,rp.isStereo, cs_info1.repo_cpd_id as repo_prod_id, rp.stochiometry as prod_stoichio
+                    from rule_products rp,
+                    (
+                        select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                        from chemical_species cs
+                    ) as cs_info1
+                    where rp.product_id=cs_info1.id
+                )
+                group by reaction_id,substrate_id,diameter,isStereo
+            ) as product_per_rxn_sub_dia_isStereo
+            where (rl.reaction_id=product_per_rxn_sub_dia_isStereo.reaction_id and
+            rl.substrate_id=product_per_rxn_sub_dia_isStereo.substrate_id and
+            rl.diameter=product_per_rxn_sub_dia_isStereo.diameter and
+            rl.isStereo=product_per_rxn_sub_dia_isStereo.isStereo)
+        ) as rl_info
+        where rl_info.diameter=10
+    ) as rl_info1
+    left join
+    (
+        select rxn_substrates_tab.id,rxn_substrates_tab.repo_rxn_id,rxn_substrates_tab.ec_numbers,
+        rxn_substrates_tab.substrate_ids as rxn_substrate_ids,rxn_substrates_tab.substrate_inchi_keys as rxn_substrate_inchis,
+        rxn_products_tab.product_ids as rxn_product_ids,rxn_products_tab.product_inchi_keys as rxn_product_inchis
+        from
+        (
+            select rxn.id, rxn.repo_rxn_id,group_concat(distinct rxn.ec_number) as ec_numbers,
+            group_concat(distinct rxn_substrates.substrate_cpd) as substrate_ids,
+            group_concat(distinct rxn_substrates.inchi_key) as substrate_inchi_keys
+            from 
+            (
+                select rxn2.id, rxn2.repo_rxn_id,er.ec_number
+                from 
+                (
+                    select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+                    from reactions rxn1
+                ) as rxn2
+                left join ec_reactions er
+                on er.reaction_id=rxn2.id
+            ) as rxn
+            left join
+            (
+                select rs.reaction_id, cs_info.cpd_id as substrate_cpd,rs.chemical_id,cs_info.inchi_key
+                from 
+                (
+                    select distinct cs.id as chem_sp_id, cs.inchi_key,ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as cpd_id
+                    from chemical_species cs
+                ) as cs_info, reaction_substrates rs
+                where rs.chemical_id=cs_info.chem_sp_id
+            ) as rxn_substrates
+            on rxn.id=rxn_substrates.reaction_id
+            group by rxn.id
+        ) as rxn_substrates_tab,
+        (
+            select rxn.id, rxn.repo_rxn_id,group_concat(distinct rxn.ec_number) as ec_numbers,
+            group_concat(distinct rxn_products.product_cpd) as product_ids,
+            group_concat(distinct rxn_products.inchi_key) as product_inchi_keys 
+            from 
+            (
+                select rxn2.id, rxn2.repo_rxn_id,er.ec_number
+                from 
+                (
+                    select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+                    from reactions rxn1
+                ) as rxn2
+                left join ec_reactions er
+                on er.reaction_id=rxn2.id
+            ) as rxn
+            left join
+            (
+                select rp.reaction_id, cs_info.cpd_id as product_cpd,rp.chemical_id,cs_info.inchi_key
+                from 
+                (
+                    select distinct cs.id as chem_sp_id, cs.inchi_key,ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as cpd_id
+                    from chemical_species cs
+                ) as cs_info, reaction_products rp
+                where rp.chemical_id=cs_info.chem_sp_id
+            ) as rxn_products
+            on rxn.id=rxn_products.reaction_id
+            group by rxn.id
+        ) as rxn_products_tab
+        where rxn_substrates_tab.id=rxn_products_tab.id
+    ) as rxn_info
+    on rxn_info.id=rl_info1.reaction_id
+    where rxn_info.repo_rxn_id like 'rxn1%'
+);//5492
+
+select '<'||reaction_id||'|'||substrate_id||'|'||diameter||'|'||
+        (SELECT 
+          CASE 
+            WHEN direction=-1 THEN 'reverse'
+            ELSE 'forward'
+        END) ||
+        (SELECT 
+          CASE 
+            WHEN isStereo=1 THEN '|'||'isStereo'||'>'
+            ELSE ''||'>'
+        END) as Name
+from rules where isStereo=1 limit 10;
+
+
+--------------------------------------------------------------------------------------------
+SELECT COUNT(*) FROM (
+    select rl_info1.reaction_id,rxn_info.repo_rxn_id,rxn_info.ec_numbers,rl_info1.rule_substrate_id,rl_info1.rule_substrate_cpd,
+    rl_info1.direction,rl_info1.diameter,rl_info1.isStereo,rl_info1.score,rl_info1.SMARTS,
+    rl_info1.rule_prod_ids,rl_info1.rule_prod_stoichios,rxn_info.rxn_substrate_ids,rxn_info.rxn_substrate_inchis,
+    rxn_info.rxn_product_ids,rxn_info.rxn_product_inchis 
+    from
+    (
+        select rl_info.reaction_id,rl_info.substrate_id as rule_substrate_id,rl_info.rule_substrate_cpd,rl_info.direction,
+        rl_info.diameter,rl_info.isStereo,rl_info.score,rl_info.SMARTS,rl_info.rule_prod_ids,rl_info.rule_prod_stoichios
+        from  
+        (
+            select rl.reaction_id,rl.substrate_id,rl.rule_substrate_cpd,rl.diameter,rl.direction,rl.isStereo,rl.score,rl.SMARTS,
+            product_per_rxn_sub_dia_isStereo.rule_prod_ids,product_per_rxn_sub_dia_isStereo.rule_prod_stoichios
+            from
+            (
+                select r.reaction_id,r.substrate_id,r.score,r.isStereo,s.smarts_string as SMARTS,r.diameter,r.direction,
+                cs_info.repo_cpd_id as rule_substrate_cpd
+                from rules r, smarts s,
+                (
+                    select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                    from chemical_species cs
+                ) as cs_info
+                where s.id=r.smarts_id and cs_info.id=r.substrate_id
+            ) as rl,
+            (
+                select reaction_id,substrate_id,diameter,isStereo,
+                group_concat(distinct repo_prod_id) as rule_prod_ids,
+                group_concat(distinct prod_stoichio) as rule_prod_stoichios
+                from 
+                ( 
+                    select rp.reaction_id, rp.substrate_id, rp.diameter,rp.isStereo, cs_info1.repo_cpd_id as repo_prod_id, rp.stochiometry as prod_stoichio
+                    from rule_products rp,
+                    (
+                        select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
+                        from chemical_species cs
+                    ) as cs_info1
+                    where rp.product_id=cs_info1.id
+                )
+                group by reaction_id,substrate_id,diameter,isStereo
+            ) as product_per_rxn_sub_dia_isStereo
+            where (rl.reaction_id=product_per_rxn_sub_dia_isStereo.reaction_id and
+            rl.substrate_id=product_per_rxn_sub_dia_isStereo.substrate_id and
+            rl.diameter=product_per_rxn_sub_dia_isStereo.diameter and
+            rl.isStereo=product_per_rxn_sub_dia_isStereo.isStereo)
+        ) as rl_info
+        where rl_info.diameter=2
+    ) as rl_info1
+    left join
+    (
+        select rxn_substrates_tab.id,rxn_substrates_tab.repo_rxn_id,rxn_substrates_tab.ec_numbers,
+        rxn_substrates_tab.substrate_ids as rxn_substrate_ids,rxn_substrates_tab.substrate_inchi_keys as rxn_substrate_inchis,
+        rxn_products_tab.product_ids as rxn_product_ids,rxn_products_tab.product_inchi_keys as rxn_product_inchis
+        from
+        (
+            select rxn.id, rxn.repo_rxn_id,group_concat(distinct rxn.ec_number) as ec_numbers,
+            group_concat(distinct rxn_substrates.substrate_cpd) as substrate_ids,
+            group_concat(distinct rxn_substrates.inchi_key) as substrate_inchi_keys
+            from 
+            (
+                select rxn2.id, rxn2.repo_rxn_id,er.ec_number
+                from 
+                (
+                    select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+                    from reactions rxn1
+                ) as rxn2
+                left join ec_reactions er
+                on er.reaction_id=rxn2.id
+            ) as rxn
+            left join
+            (
+                select rs.reaction_id, cs_info.cpd_id as substrate_cpd,rs.chemical_id,cs_info.inchi_key
+                from 
+                (
+                    select distinct cs.id as chem_sp_id, cs.inchi_key,ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as cpd_id
+                    from chemical_species cs
+                ) as cs_info, reaction_substrates rs
+                where rs.chemical_id=cs_info.chem_sp_id
+                and rs.chemical_id not in (select distinct substrate_id from rules r)
+            ) as rxn_substrates
+            on rxn.id=rxn_substrates.reaction_id
+            group by rxn.id
+        ) as rxn_substrates_tab,
+        (
+            select rxn.id, rxn.repo_rxn_id,group_concat(distinct rxn.ec_number) as ec_numbers,
+            group_concat(distinct rxn_products.product_cpd) as product_ids,
+            group_concat(distinct rxn_products.inchi_key) as product_inchi_keys 
+            from 
+            (
+                select rxn2.id, rxn2.repo_rxn_id,er.ec_number
+                from 
+                (
+                    select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+                    from reactions rxn1
+                ) as rxn2
+                left join ec_reactions er
+                on er.reaction_id=rxn2.id
+            ) as rxn
+            left join
+            (
+                select rp.reaction_id, cs_info.cpd_id as product_cpd,rp.chemical_id,cs_info.inchi_key
+                from 
+                (
+                    select distinct cs.id as chem_sp_id, cs.inchi_key,ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as cpd_id
+                    from chemical_species cs
+                ) as cs_info, reaction_products rp
+                where rp.chemical_id=cs_info.chem_sp_id
+                and rp.chemical_id not in (select distinct product_id from rule_products)
+            ) as rxn_products
+            on rxn.id=rxn_products.reaction_id
+            group by rxn.id
+        ) as rxn_products_tab
+        where rxn_substrates_tab.id=rxn_products_tab.id
+    ) as rxn_info
+    on rxn_info.id=rl_info1.reaction_id
+);//652152
+    where rxn_info.repo_rxn_id like 'rxn1%'
+);//43936
