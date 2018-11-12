@@ -163,10 +163,15 @@ def build_query(diam=10):
 
 
 def execute_query(conn, qry):
+    """
+    execute_query: executes the given query qry against db connection conn
+    :param conn: the Connection object
+    :param qry: SQL query smarts_string
+    :return: a list of rows (tuples) if no error, otherwise None
+    """
     ret_data = None
-    # print(qry)
     # if sqlite3.complete_statement(qry):
-    print(qry)
+    # print(qry)
     try:
         cur = conn.cursor()
         qry = qry.strip()
@@ -217,15 +222,16 @@ def post_query_process(data_rows, row_count=0):
 
 def generate_rule_per_row_table(conn, row_count=0, diam=10):
     """
-    Query the tables rules, rule_products, reaction, smarts, reaction_substrates,
-    reaction_products, chemical_species and ec_numbers
+    generate_rule_per_row_table: Query the tables rules, rule_products, reactions,
+    reaction_substrates, reaction_products, smarts, chemical_species and ec_numbers
     :param conn: the Connection object
     :param row_count: number of rows to output, if 0 return all
     :param diam: reaction diameter
-    :return: The list of rows (tuples) if no error, otherwise None
+    :return: a list of rows (tuples) if no error, otherwise None
     """
     qry = build_query(diam)
-    qry_seed = qry + " where rxn_info.repo_rxn_id='rxn14222' and rl_info1.rule_substrate_cpd='cpd17740'"
+    qry_seed = (qry + " where rxn_info.repo_rxn_id='rxn14222'" +
+                " and rl_info1.rule_substrate_cpd='cpd17740'")
     # qry_seed = qry + " where rxn_info.repo_rxn_id like 'rxn1%'"
     qry_result = execute_query(conn, qry_seed)
 
