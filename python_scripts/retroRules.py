@@ -19,18 +19,15 @@ def create_connection(db_file):
         print(e)
  
     return None
- 
 
-def generate_rule_per_row_table(conn, row_count=0, diam=10):
+
+def build_query(diam=10):
     """
-    Query the tables rules, rule_products, reaction, smarts, reaction_substrates,
-    reaction_products, chemical_species and ec_numbers
-    :param conn: the Connection object
-    :param row_count: number of rows to output, if 0 return all
+    build_query: construct a query across tables rules, rule_products, reaction, smarts,
+    reaction_substrates, reaction_products, chemical_species and ec_numbers
     :param diam: reaction diameter
-    :return: The list of rows (tuples) if no error, otherwise None
+    :return: an sqlite3 query string
     """
-    cur = conn.cursor()
     rl_info = """
                 select rl.reaction_id,rl.substrate_id,rl.rule_substrate_cpd,rl.diameter,rl.direction,rl.isStereo,rl.score,rl.SMARTS,
                 product_per_rxn_sub_dia_isStereo.rule_prod_ids,product_per_rxn_sub_dia_isStereo.rule_prod_stoichios,
@@ -136,9 +133,10 @@ def generate_rule_per_row_table(conn, row_count=0, diam=10):
             group by rxn.id
         ) as rxn_products_tab
         where rxn_substrates_tab.id=rxn_products_tab.id
-    ) as rxn_info"""
+    ) as rxn_info
+    """
 
-    qry1 = rl_info1 + " left join " + rxn_info + " on rxn_info.id=rl_info1.reaction_id "
+    qry = rl_info1 + " left join " + rxn_info + " on rxn_info.id=rl_info1.reaction_id "
 
     qry = """
     select rl_info1.reaction_id,rxn_info.repo_rxn_id,rxn_info.ec_numbers,
@@ -159,39 +157,26 @@ def generate_rule_per_row_table(conn, row_count=0, diam=10):
                 WHEN rl_info1.isStereo=1 THEN '|'||'isStereo'||'>'
                 ELSE ''||'>'
             END) as Name)
-    from """ + qry1
-    # qry_seed = (qry + " where rxn_info.repo_rxn_id='rxn14222'
-    #                     and rl_info1.rule_substrate_cpd='cpd17740'"
-    qry_seed = qry + " where rxn_info.repo_rxn_id like 'rxn1%'"
+    from """ + qry
 
+    return qry
+
+
+def execute_query(conn, qry):
+    ret_data = None
+    # print(qry)
+    # if sqlite3.complete_statement(qry):
+    print(qry)
     try:
-        cur.execute(qry_seed)
+        cur = conn.cursor()
+        qry = qry.strip()
+        cur.execute(qry)
         rows = cur.fetchall()
-        if row_count > 0:
-            return rows[:row_count]
-        else:
-            return rows
+        ret_data = rows
     except Error as e:
-        print(e)
-        return None
+        print("An error occurred:", e.args[0])
 
-
-def post_query_process(in_data):
-    """
-    postQueryProcessFurther massage the data to meet with
-    downstream input required formats
-    :param in_data : SQL query result in a format of list of tupples
-    """
-    out_data = []
-    pattern = r'>>\((.*)\)$'
-    for row in in_data:
-        lst_row = list(row)
-        any_num = lst_row[17]  # 'total_stoichios'
-        smt = lst_row[9]  # 'SMARTS'
-        lst_row[17] = (repeat_Any(any_num))
-        lst_row[9] = re.sub(pattern, r'>>\1', smt)
-        out_data.append(lst_row)
-    return out_data
+    return ret_data
 
 
 def repeat_Any(N):
@@ -202,6 +187,49 @@ def repeat_Any(N):
     for _ in itertools.repeat(None, N-1):
         rep_str += ';Any'
     return rep_str
+
+
+def post_query_process(data_rows, row_count=0):
+    """
+    postQueryProcessFurther massage the data to meet with
+    downstream input required formats
+    :param data_rows : SQL query result in a format of list of tupples
+    :param row_count : The number of rows out of in_data to be processed
+    """
+    in_data = []
+    out_data = []
+    if row_count > 0:
+        in_data = data_rows[:row_count]
+    else:
+        in_data = data_rows
+
+    pattern = r'>>\((.*)\)$'
+    for row in in_data:
+        lst_row = list(row)
+        any_num = lst_row[17]  # 'total_stoichios'
+        smt = lst_row[9]  # 'SMARTS'
+        lst_row[17] = (repeat_Any(any_num))
+        lst_row[9] = re.sub(pattern, r'>>\1', smt)
+        out_data.append(lst_row)
+
+    return out_data
+
+
+def generate_rule_per_row_table(conn, row_count=0, diam=10):
+    """
+    Query the tables rules, rule_products, reaction, smarts, reaction_substrates,
+    reaction_products, chemical_species and ec_numbers
+    :param conn: the Connection object
+    :param row_count: number of rows to output, if 0 return all
+    :param diam: reaction diameter
+    :return: The list of rows (tuples) if no error, otherwise None
+    """
+    qry = build_query(diam)
+    qry_seed = qry + " where rxn_info.repo_rxn_id='rxn14222' and rl_info1.rule_substrate_cpd='cpd17740'"
+    # qry_seed = qry + " where rxn_info.repo_rxn_id like 'rxn1%'"
+    qry_result = execute_query(conn, qry_seed)
+
+    return post_query_process(qry_result, row_count)
 
 
 def csv_dict_reader(file_obj):
@@ -259,24 +287,20 @@ def csv_dict_writer(path, fieldnames, data, delm):
 
 def main():
     database = "/Users/qzhang/qzwk_dir/upload_RetroRules/retrorules_dump/mvc.db"
-    # create a database connection
+
+    print("0. create a database connection...")
     conn = create_connection(database)
     row_cnt = 2  # 0
     diam = 10
     str_row_cnt = str(row_cnt) if row_cnt > 0 else 'all'
-    outfile_nm = '../TSVs/retro_rules_dia{}_{}'.format(str(diam), str_row_cnt) + '.tsv'
+    outfile_nm = "../TSVs/retro_rules_dia{}_{}".format(str(diam), str_row_cnt) + ".tsv"
     with conn:
         print("1. Query tables to create the result data...")
-        query_results = generate_rule_per_row_table(conn, row_cnt, diam)
-
-        print("2. Post query processing data...")
-        processed_results = None
-        if query_results:
-            processed_results = post_query_process(query_results) 
+        rule_per_row_results = generate_rule_per_row_table(conn, row_cnt, diam)
             
-        print("3. Write to output file {}".format(outfile_nm))
-        if processed_results:
-            csv_write(processed_results, outfile_nm)
+        print("2. Write to output file {}".format(outfile_nm))
+        if rule_per_row_results:
+            csv_write(rule_per_row_results, outfile_nm)
 
  
 if __name__ == '__main__':
