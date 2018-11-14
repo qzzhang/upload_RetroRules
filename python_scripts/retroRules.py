@@ -49,8 +49,9 @@ def build_query(diam=10):
                     group_concat(prod_stoichio) as rule_prod_stoichios,
                     sum(prod_stoichio) as total_stoichios
                     from
-                    ( 
-                        select rp.reaction_id, rp.substrate_id, rp.diameter,rp.isStereo, cs_info1.repo_cpd_id as repo_prod_id, rp.stochiometry as prod_stoichio
+                    (
+                        select rp.reaction_id, rp.substrate_id, rp.diameter,rp.isStereo,
+                        cs_info1.repo_cpd_id as repo_prod_id, rp.stochiometry as prod_stoichio
                         from rule_products rp,
                         (
                             select cs.id, ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as repo_cpd_id
@@ -72,7 +73,7 @@ def build_query(diam=10):
         from (""" + rl_info + ") as rl_info where rl_info.diameter=" + str(diam) + ") as rl_info1"
 
     rxn_info = """(
-                select rxn_substrates_tab.id,rxn_substrates_tab.repo_rxn_id,rxn_substrates_tab.ec_numbers,
+        select rxn_substrates_tab.id,rxn_substrates_tab.repo_rxn_id,rxn_substrates_tab.ec_numbers,
         rxn_substrates_tab.substrate_ids as rxn_substrate_ids,rxn_substrates_tab.substrate_inchi_keys as rxn_substrate_inchis,
         rxn_products_tab.product_ids as rxn_product_ids,rxn_products_tab.product_inchi_keys as rxn_product_inchis
         from
@@ -93,7 +94,7 @@ def build_query(diam=10):
             ) as rxn
             left join
             (
-                select rs.reaction_id, cs_info.cpd_id as substrate_cpd,rs.chemical_id,cs_info.inchi_key
+                select rs.reaction_id, cs_info.cpd_id as substrate_cpd, rs.chemical_id, cs_info.inchi_key
                 from 
                 (
                     select distinct cs.id as chem_sp_id, cs.inchi_key,ifnull(cs.seed, ifnull(cs.bigg, ifnull(cs.kegg, ifnull(cs.metacyc, cs.mnxm)))) as cpd_id
@@ -196,7 +197,7 @@ def repeat_Any(N):
 
 def post_query_process(data_rows, row_count=0):
     """
-    postQueryProcessFurther massage the data to meet with
+    postQueryProcess: Further massage the data to meet with
     downstream input required formats
     :param data_rows : SQL query result in a format of list of tupples
     :param row_count : The number of rows out of in_data to be processed
@@ -230,9 +231,10 @@ def generate_rule_per_row_table(conn, row_count=0, diam=10):
     :return: a list of rows (tuples) if no error, otherwise None
     """
     qry = build_query(diam)
-    qry_seed = (qry + " where rxn_info.repo_rxn_id='rxn14222'" +
-                " and rl_info1.rule_substrate_cpd='cpd17740'")
+    # qry_seed = (qry + " where rxn_info.repo_rxn_id='rxn14222'" +
+    #           " and rl_info1.rule_substrate_cpd='cpd17740'")
     # qry_seed = qry + " where rxn_info.repo_rxn_id like 'rxn1%'"
+    qry_seed = qry + " where rxn_info."
     qry_result = execute_query(conn, qry_seed)
 
     return post_query_process(qry_result, row_count)
@@ -296,8 +298,8 @@ def main():
 
     print("0. create a database connection...")
     conn = create_connection(database)
-    row_cnt = 2  # 0
-    diam = 10
+    row_cnt = 0
+    diam = 2
     str_row_cnt = str(row_cnt) if row_cnt > 0 else 'all'
     outfile_nm = "../TSVs/retro_rules_dia{}_{}".format(str(diam), str_row_cnt) + ".tsv"
     with conn:
@@ -308,6 +310,6 @@ def main():
         if rule_per_row_results:
             csv_write(rule_per_row_results, outfile_nm)
 
- 
+
 if __name__ == '__main__':
     main()
