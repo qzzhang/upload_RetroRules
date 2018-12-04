@@ -4,6 +4,7 @@ from sqlite3 import Error
 import csv
 import pandas as pd
 import datetime
+import pprint
 
 
 def create_connection(db_file):
@@ -29,8 +30,9 @@ def column_attribute_query():
     :return: an sqlite3 query string
     """
     qry = """
-    select distinct en.env_name||'|'||org.common_name||'|'||prj.project_name as env_org_proj_name,
-    org.NCBI_taxid, prj.contributor, en.id as env_id, org.id as org_id, prj.id as proj_id
+    select distinct 'eop_E'||ob.environment_id||'-O'||ob.organism_id||'-P'||ob.project_id as env_org_proj_id,
+    en.env_name as environment_name, org.common_name as organism_name, prj.project_name as project_name,
+    org.NCBI_taxid, prj.contributor, prj.project_description
     from matchmaker_observation ob,
     matchmaker_environment en,
     matchmaker_project prj,
@@ -62,23 +64,18 @@ def matrix_query():
     :return: an sqlite3 query string
     """
     qry = """
-        select group_concat(ob.compound_id) as cpd_ids,
-        group_concat(ob.action) as actions, group_concat(ob.confidence) as confidences,
-        en.env_name||'|'||org.common_name||'|'||prj.project_name as env_org_proj_name,
-        en.id as env_id, org.id as org_id, prj.id as proj_id
-        from matchmaker_observation ob,
-        matchmaker_environment en,
-        matchmaker_project prj,
-        matchmaker_organism org
-        where ob.organism_id=org.id and ob.project_id=prj.id and ob.environment_id=en.id
-        group by en.id, org_id, prj.id
+        select group_concat(compound_id) as cpd_ids,
+        group_concat(action) as actions, group_concat(confidence) as confidences,
+        'eop_E'||environment_id||'-O'||organism_id||'-P'||project_id as env_org_proj_id
+        from matchmaker_observation
+        group by env_org_proj_id
     """
     return qry
 
 
 def post_query_process(data_rows, row_count=0):
     """
-    postQueryProcess: Further massage the data to meet with
+    post_query_process: Further massage the data to meet with
     downstream input required formats
     :param data_rows : SQL query result in a format of list of tupples
     :param row_count : The number of rows out of data_rows to be processed
@@ -92,7 +89,7 @@ def post_query_process(data_rows, row_count=0):
     else:
         in_data = data_rows
 
-    # pre-fill the first column using 'compound_id' as caption and 
+    # pre-fill the first column using 'compound_id' as caption and
     # compound_id's from 1 through row_count.
     dict_data['compound_id'] = [i + 1 for i in range(row_count)]
 
@@ -108,19 +105,45 @@ def post_query_process(data_rows, row_count=0):
 
         for i in range(len(cpd_ids)):
             int_cpd_id = int(cpd_ids[i])
-            if actions[i] == 'N':  # ('Sample metabolite not detected
-                                   #  or no significant change')
+            if actions[i] == 'N':
+                # Sample metabolite not detected or no significant change
                 out_data_col[int_cpd_id - 1] = ''
-            elif actions[i] == 'D':  # 'Control metabolite detected'
+            elif actions[i] == 'D':  # Control metabolite detected
                 out_data_col[int_cpd_id - 1] = ''
             elif actions[i] == 'I':  # Intake
                 out_data_col[int_cpd_id - 1] = str(-float(confidences[i]))
             elif actions[i] == 'E':  # Excrete
                 out_data_col[int_cpd_id - 1] = str(float(confidences[i]))
-
+        k_val = lst_row[3]
+        if ',' in lst_row[3]:
+            k_val = '"{}"'.format(k_val)
         dict_data[lst_row[3]] = out_data_col
         list_data.append(out_data_col)
     return (dict_data, list_data)
+
+
+def process_col_results(data_rows, row_count=0):
+    """
+    process_col_results: Further massage the data to meet with
+    downstream input required formats
+    :param data_rows : SQL query result in a format of list of tupples
+    :param row_count : The number of rows out of data_rows to be processed
+    :return: a dict object and a list object
+    """
+    in_data = []
+    out_data = []
+    if row_count > 0:
+        in_data = data_rows[:row_count]
+    else:
+        in_data = data_rows
+
+    for row in in_data:
+        lst_row = list(row)
+        if ',' in lst_row[0]:
+            lst_row[0] = '"{}"'.format(lst_row[0])
+        out_data.append(tuple(lst_row))
+
+    return out_data
 
 
 def execute_query(conn, qry):
@@ -237,6 +260,7 @@ def csv_dict_writer(path, fieldnames, data, delm):
 
 
 def main():
+    # pp = pprint.PrettyPrinter(indent=4)
     database = "/Users/qzhang/qzwk_dir/wom/wom.sqlite3"
     print("1. create a database connection...")
     conn = create_connection(database)
@@ -247,16 +271,20 @@ def main():
 
         print("2.1 Column query result...")
         col_qry_result = execute_query(conn, column_attribute_query())
-        eop_header = ["env_org_proj_name", "NCBI_taxid", "contributor",
-                      "env_id", "org_id", "proj_id"]
+        eop_header = ["env_org_proj_id", "environment_name", "organism_name",
+                      "project_name", "NCBI_taxid", "contributor",
+                      "project_description"]
         eopfile_nm = "../TSVs/wom_eop_{}{}".format(date_str, ".tsv")
         print("2.2 Write environment_organism_project info to output file {}"
               .format(eopfile_nm))
         if col_qry_result:
+            # pp.pprint(col_qry_result)
             csv_write(col_qry_result, eopfile_nm, eop_header)
 
         print("3.1. read inchiKey file...")
-        csvfile_path = "/Users/qzhang/qzwk_dir/wom/genericLoading/formula_withoutNA_withInchiKeys.tsv"
+        csvfile_path = "/Users/qzhang/qzwk_dir/wom/genericLoading/" + \
+            "formula_withoutNA_withInchiKeys.tsv"
+
         cpd_inchi_dict = read_tsv_into_dict(csvfile_path)
 
         print("3.2 Row query result...")
@@ -264,7 +292,8 @@ def main():
 
         print("3.3 Inserting inchiKey to compounds")
         row_result = row_attribute_process(row_qry_result, cpd_inchi_dict)
-        cpd_header = ["cpd_name", "formula", "cpd_id", "neutralmass", "inchiKey"]
+        cpd_header = ["cpd_name", "formula", "cpd_id",
+                      "neutralmass", "inchiKey"]
         cpdfile_nm = "../TSVs/wom_cpd_{}{}".format(date_str, ".tsv")
 
         print("3.4 Write compounds to output file {}".format(cpdfile_nm))
@@ -281,4 +310,13 @@ def main():
 
 
 if __name__ == '__main__':
+    """
+    Note: After generate the wom_cpd_*.tsv/wom_eop_*.tsv/wom_matrix_df_*.tsv
+          files, there is still another step to do before uploading the tsv
+          files to KBase.Namely, the first columns of wom_cpd_*.tsv and
+          wom_matrix_df_*.tsv have tomatch with each other value-wise,
+          even though their column caption names can be different
+          (e.g., compound_name or compound_id column for both or
+          for either file).
+    """
     main()
