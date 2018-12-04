@@ -86,8 +86,9 @@ def build_query(diam=10):
                 select rxn2.id, rxn2.repo_rxn_id,er.ec_number
                 from
                 (
-                    select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+                    select rxn1.id, rxn1.seed as repo_rxn_id
                     from reactions rxn1
+                    where rxn1.seed not null
                 ) as rxn2
                 left join ec_reactions er
                 on er.reaction_id=rxn2.id
@@ -114,8 +115,9 @@ def build_query(diam=10):
                 select rxn2.id, rxn2.repo_rxn_id,er.ec_number
                 from
                 (
-                    select rxn1.id, ifnull(rxn1.seed, ifnull(rxn1.bigg, ifnull(rxn1.kegg, ifnull(rxn1.metacyc, rxn1.mnxr)))) as repo_rxn_id
+                    select rxn1.id, rxn1.seed as repo_rxn_id
                     from reactions rxn1
+                    where rxn1.seed not null
                 ) as rxn2
                 left join ec_reactions er
                 on er.reaction_id=rxn2.id
@@ -371,8 +373,9 @@ def post_query_process(data_rows, row_count=0):
 
 def generate_rule_per_row_table(conn, row_count=0, diam=10):
     """
-    generate_rule_per_row_table: Query the tables rules, rule_products, reactions,
-    reaction_substrates, reaction_products, smarts, chemical_species and ec_numbers
+    generate_rule_per_row_table: Query the tables rules, rule_products,
+    reactions, reaction_substrates, reaction_products, smarts,
+    chemical_species and ec_numbers
     :param conn: the Connection object
     :param row_count: number of rows to output, if 0 return all
     :param diam: reaction diameter
@@ -381,7 +384,7 @@ def generate_rule_per_row_table(conn, row_count=0, diam=10):
     qry = build_query(diam)
     # qry_seed = (qry + " where rxn_info.repo_rxn_id='rxn14222'" +
     #           " and rl_info1.rule_substrate_cpd='cpd17740'")
-    qry_seed = qry + " where rxn_info.repo_rxn_id like 'rxn1%'"
+    qry_seed = qry + " where rxn_info.repo_rxn_id like 'rxn%'"
 
     qry_result = execute_query(conn, qry_seed)
 
@@ -390,8 +393,9 @@ def generate_rule_per_row_table(conn, row_count=0, diam=10):
 
 def generate_rule_per_row_table_seed_cpds(conn, row_count=0, diam=10):
     """
-    generate_rule_per_row_table: Query the tables rules, rule_products, reactions,
-    reaction_substrates, reaction_products, smarts, chemical_species and ec_numbers
+    generate_rule_per_row_table_seed_cpds: Query the tables rules,
+    rule_products, reactions, reaction_substrates, reaction_products, smarts,
+    chemical_species and ec_numbers
     :param conn: the Connection object
     :param row_count: number of rows to output, if 0 return all
     :param diam: reaction diameter
@@ -474,8 +478,10 @@ def main():
     rule_per_row_results_seed_cpds = None
     with conn:
         print("1. Query tables to create the result data...")
-        # rule_per_row_results = generate_rule_per_row_table(conn, row_cnt, diam)
-        rule_per_row_results_seed_cpds = generate_rule_per_row_table_seed_cpds(conn, row_cnt, diam)
+        rule_per_row_results = generate_rule_per_row_table(
+                                           conn, row_cnt, diam)
+        # rule_per_row_results_seed_cpds = generate_rule_per_row_table_seed_cpds(
+        #                                    conn, row_cnt, diam)
             
         print("2. Write to output file {}".format(outfile_nm))
         if rule_per_row_results:
