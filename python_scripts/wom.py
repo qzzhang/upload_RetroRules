@@ -281,7 +281,7 @@ def main():
             # pp.pprint(col_qry_result)
             csv_write(col_qry_result, eopfile_nm, eop_header)
 
-        print("3.1. read inchiKey file...")
+        print("3.1. read inchikey file...")
         csvfile_path = "/Users/qzhang/qzwk_dir/wom/genericLoading/" + \
             "formula_withoutNA_withInchiKeys.tsv"
 
@@ -290,10 +290,10 @@ def main():
         print("3.2 Row query result...")
         row_qry_result = execute_query(conn, row_attribute_query())
 
-        print("3.3 Inserting inchiKey to compounds")
+        print("3.3 Inserting inchikey to compounds")
         row_result = row_attribute_process(row_qry_result, cpd_inchi_dict)
         cpd_header = ["cpd_name", "formula", "cpd_id",
-                      "neutralmass", "inchiKey"]
+                      "mass", "inchikey"]
         cpdfile_nm = "../TSVs/wom_cpd_{}{}".format(date_str, ".tsv")
 
         print("3.4 Write compounds to output file {}".format(cpdfile_nm))
@@ -320,3 +320,4 @@ if __name__ == '__main__':
           for either file).
     """
     main()
+    
