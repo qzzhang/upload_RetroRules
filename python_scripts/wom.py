@@ -177,9 +177,9 @@ def build_matrix(conn, row_count):
     return post_query_process(execute_query(conn, qry), row_count)
 
 
-def row_attribute_process(in_data, cpd_inchi_dict):
+def insert_inchikey(in_data, cpd_inchi_dict):
     """
-    row_attribute_process: insert the inchiKey column to the input in_data
+    insert_inchikey: insert the inchiKey column to the input in_data
     :param in_data : SQL query result in a format of list of tupples
     :param cpd_inchi_dict : The dict for lookup with a cpd name for inchiKey
     """
@@ -291,7 +291,7 @@ def main():
         row_qry_result = execute_query(conn, row_attribute_query())
 
         print("3.3 Inserting inchikey to compounds")
-        row_result = row_attribute_process(row_qry_result, cpd_inchi_dict)
+        row_result = insert_inchikey(row_qry_result, cpd_inchi_dict)
         cpd_header = ["cpd_name", "formula", "cpd_id",
                       "mass", "inchikey"]
         cpdfile_nm = "../TSVs/wom_cpd_{}{}".format(date_str, ".tsv")
